@@ -14,20 +14,20 @@ const IMG_HOSTS = {};
 
 if (!location.host.startsWith("localhost")) {
     Object.assign(IMG_HOSTS, {
-        "2021": "archiv0.derrosarotepanzer.com",
-        "2022": "archiv0.derrosarotepanzer.com",
-        "2023": "archiv0.derrosarotepanzer.com",
-        "2024": "archiv0.derrosarotepanzer.com",
-        "2025": "archiv1.derrosarotepanzer.com",
-        "2026": "archiv1.derrosarotepanzer.com",
-        "2027": "archiv2.derrosarotepanzer.com",
-        "2028": "archiv2.derrosarotepanzer.com",
-        "2029": "archiv3.derrosarotepanzer.com",
-        "2030": "archiv3.derrosarotepanzer.com",
-        "2031": "archiv4.derrosarotepanzer.com",
-        "2032": "archiv4.derrosarotepanzer.com",
-        "2033": "archiv5.derrosarotepanzer.com",
-        "2034": "archiv5.derrosarotepanzer.com",
+        "2021": "https://archiv0.derrosarotepanzer.com",
+        "2022": "https://archiv0.derrosarotepanzer.com",
+        "2023": "https://archiv0.derrosarotepanzer.com",
+        "2024": "https://archiv0.derrosarotepanzer.com",
+        "2025": "https://archiv1.derrosarotepanzer.com",
+        "2026": "https://archiv1.derrosarotepanzer.com",
+        "2027": "https://archiv2.derrosarotepanzer.com",
+        "2028": "https://archiv2.derrosarotepanzer.com",
+        "2029": "https://archiv3.derrosarotepanzer.com",
+        "2030": "https://archiv3.derrosarotepanzer.com",
+        "2031": "https://archiv4.derrosarotepanzer.com",
+        "2032": "https://archiv4.derrosarotepanzer.com",
+        "2033": "https://archiv5.derrosarotepanzer.com",
+        "2034": "https://archiv5.derrosarotepanzer.com",
     });
 }
 
