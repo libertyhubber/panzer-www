@@ -330,18 +330,19 @@ def main(args: list[str]) -> int:
 
         return ignore
 
-    breakpoint()
     shutil.copytree(www_img_dir, archiv_img_dir, ignore=ignore_existing, dirs_exist_ok=True)
 
     with change_dir(archiv_repo):
         sp.call(["git", "add", str(archiv_fpath.parent)])
         sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
+        sp.call(["git", "push"])
 
     shutil.rmtree(www_img_dir)
 
     sp.call(["git", "checkout", str(www_img_dir)])
     sp.call(["git", "add", str(cur_dir / "images")])
     sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
+    sp.call(["git", "push"])
 
     return 0
 
