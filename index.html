@@ -15,16 +15,18 @@
 const CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
 
 const CACHE = {}
-const PROMISES = {}
+const LOADING = {}
 
 async function fetchJson(path) {
     if (!CACHE[path]) {
-        if (!PROMISES[path]) {
-            const promise = fetch(path + "?cb=" + CB)
-            PROMISES[path] = promise
-            CACHE[path] = await (await promise).json()
+        if (!LOADING[path]) {
+            LOADING[path] = 1
+            const promise = await fetch(path + "?cb=" + CB)
+            CACHE[path] = await promise.json()
         } else {
-            await PROMISES[path]
+            console.log("miss")
+            const promise = await fetch(path + "?cb=" + CB)
+            CACHE[path] = await promise.json()
         }
     }
     return CACHE[path]
