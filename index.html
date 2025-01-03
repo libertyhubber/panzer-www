@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DerRosarotePanzer</title>
 
-    <link rel="prefetch" href="/images/dir_index.json" as="fetch"/>
-    <link rel="preconnect" href="https://archiv1.derrosarotepanzer.com"/>
+    <link rel="dns-prefetch" href="https://archiv1.derrosarotepanzer.com"/>
     <link rel="dns-prefetch" href="https://archiv0.derrosarotepanzer.com"/>
 
     <link rel="shortcut icon" type="image/png" sizes="64x64" href="assets/favicon64.png">
@@ -14,6 +13,22 @@
     <link rel="stylesheet" href="/assets/style.css?cb=19" />
 </head>
 <body>
+<script type="text/javascript">
+const CACHE = {}
+const GALLERY_STATE = {}
+
+async function fetchJson(path) {
+    if (!CACHE[path]) {
+        const promise = await fetch(path)
+        CACHE[path] = await promise.json()
+    }
+    return CACHE[path]
+}
+
+(async function() {
+    GALLERY_STATE.dirIndex = await fetchJson("images/dir_index.json")
+})()
+</script>
 
 <div class="container">
 
@@ -64,7 +79,7 @@ lightbox.init()
 window.lightbox = lightbox
 </script>
 
-<script type="text/javascript" src="/assets/app.js?cb=18"></script>
+<script type="text/javascript" src="/assets/app.js?cb=19"></script>
 
 <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/photoswipe.css">
 
