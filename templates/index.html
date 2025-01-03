@@ -12,12 +12,49 @@ const lightbox = new PhotoSwipeLightbox({
   pswpModule: () => import('/assets/photoswipe.esm.js'),
   loop: false,
 })
-lightbox.on('change', panzerApp.updateGalleryHandler)
-lightbox.init()
-window.lightbox = lightbox
-</script>
 
-<script type="text/javascript" src="/assets/app.js?cb=17"></script>
+window.lightbox = lightbox;
+
+// const CB = Math.random().toString(36).slice(2); // Cachebust
+window.CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
+
+const LOADING = {}
+const CACHE = {}
+
+async function fetchJson(path) {
+    if (!CACHE[path]) {
+        if (!LOADING[path]) {
+            LOADING[path] = 1
+            const promise = await fetch(path + "?cb=" + CB)
+            CACHE[path] = await promise.json()
+        } else {
+            // wait for cache population and try again
+            await new Promise((resolve, reject) => {
+                return setTimeout(async function() {resolve(await fetchJson(path))}, 50)
+            })
+        }
+    }
+    return CACHE[path]
+}
+
+window.fetchJson = fetchJson;
+
+await Promise.all([
+    fetchJson("images/dir_index.json"),
+    fetchJson("https://archiv1.derrosarotepanzer.com/images/2025/01/entry_index.json"),
+    fetchJson("https://archiv0.derrosarotepanzer.com/images/2024/12/entry_index.json"),
+])
+
+const appNode = document.createElement("script")
+appNode.setAttribute("type", "text/javascript")
+appNode.setAttribute("src", "/assets/app.js?cb=22")
+document.body.appendChild(appNode)
+
+appNode.addEventListener("load", function(){
+    lightbox.on('change', panzerApp.updateGalleryHandler)
+    lightbox.init()
+})
+</script>
 
 <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/photoswipe.css">
 {% endblock %}

@@ -7,10 +7,12 @@
 
     <link rel="shortcut icon" type="image/png" sizes="64x64" href="assets/favicon64.png">
 
-    <link rel="stylesheet" href="/assets/style.css?cb=21" />
+    <link rel="stylesheet" href="/assets/style.css?cb=22" />
 </head>
 <body>
+
 <div class="container">
+
 
 <div id="top-nav">
     <a href="/index.html" class="active">MEMES</a>
@@ -36,12 +38,16 @@
     <!-- <a href="/media.html">MEDIEN</a> -->
 </div>
 
+
+
 <div id="gallery"></div>
+
 
 <div class="footer">
    Made with 💛 by an anonymous supporter. <br>
    Some images from <a class="mobilelink" target="_blank" href="http://icons8.com/">icons8.com</a>.
 </div>
+
 
 <script type="module">
 import PhotoSwipeLightbox from '/assets/photoswipe-lightbox.esm.js';
@@ -63,14 +69,12 @@ async function fetchJson(path) {
     if (!CACHE[path]) {
         if (!LOADING[path]) {
             LOADING[path] = 1
-            console.log("fetch", path)
             const promise = await fetch(path + "?cb=" + CB)
             CACHE[path] = await promise.json()
         } else {
-            // wait for cache to load and try again
-            console.log("concurrent", path)
+            // wait for cache population and try again
             await new Promise((resolve, reject) => {
-                return setTimeout(async function() {resolve(await fetchJson(path))}, 100)
+                return setTimeout(async function() {resolve(await fetchJson(path))}, 50)
             })
         }
     }
@@ -79,13 +83,15 @@ async function fetchJson(path) {
 
 window.fetchJson = fetchJson;
 
-(async function(){
-    await fetchJson("images/dir_index.json")
-})()
+await Promise.all([
+    fetchJson("images/dir_index.json"),
+    fetchJson("https://archiv1.derrosarotepanzer.com/images/2025/01/entry_index.json"),
+    fetchJson("https://archiv0.derrosarotepanzer.com/images/2024/12/entry_index.json"),
+])
 
 const appNode = document.createElement("script")
 appNode.setAttribute("type", "text/javascript")
-appNode.setAttribute("src", "/assets/app.js?cb=21")
+appNode.setAttribute("src", "/assets/app.js?cb=22")
 document.body.appendChild(appNode)
 
 appNode.addEventListener("load", function(){
@@ -95,7 +101,8 @@ appNode.addEventListener("load", function(){
 </script>
 
 <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/photoswipe.css">
-<link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/icons.css?cb=21" />
 
+
+<link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/icons.css?cb=22" />
 </body>
 </html>
