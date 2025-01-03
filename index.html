@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DerRosarotePanzer</title>
 
-    <link rel="prefetch" href="/images/dir_index.json" />
+    <link rel="preload" href="/images/dir_index.json" as="fetch"/>
+    <link rel="preconnect" href="https://archiv1.derrosarotepanzer.com" />
+    <link rel="dns-prefetch" href="https://archiv0.derrosarotepanzer.com" />
 
     <link rel="shortcut icon" type="image/png" sizes="64x64" href="assets/favicon64.png">
 
@@ -16,12 +18,14 @@
 <script type="text/javascript">
 (function(){
     var prefetchLink = document.createElement("link")
-    prefetchLink.setAttribute("rel", "prefetch")
+    prefetchLink.setAttribute("rel", "preload")
+    prefetchLink.setAttribute("as", "fetch")
     prefetchLink.setAttribute("href", "https://archiv1.derrosarotepanzer.com/images/2025/01/entry_index.json")
     document.head.appendChild(prefetchLink)
 
     var prefetchLink = document.createElement("link")
-    prefetchLink.setAttribute("rel", "prefetch")
+    prefetchLink.setAttribute("rel", "preload")
+    prefetchLink.setAttribute("as", "fetch")
     prefetchLink.setAttribute("href", "https://archiv1.derrosarotepanzer.com/images/2025/01/thumbnails.jpg")
     document.head.appendChild(prefetchLink)
 })()
