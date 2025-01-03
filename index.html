@@ -5,29 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DerRosarotePanzer</title>
 
-    <link rel="dns-prefetch" href="https://archiv1.derrosarotepanzer.com"/>
-    <link rel="dns-prefetch" href="https://archiv0.derrosarotepanzer.com"/>
-
     <link rel="shortcut icon" type="image/png" sizes="64x64" href="assets/favicon64.png">
 
     <link rel="stylesheet" href="/assets/style.css?cb=19" />
 </head>
 <body>
 <script type="text/javascript">
+// const CB = Math.random().toString(36).slice(2); // Cachebust
+const CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
+
 const CACHE = {}
-const GALLERY_STATE = {}
+const PROMISES = {}
 
 async function fetchJson(path) {
     if (!CACHE[path]) {
-        const promise = await fetch(path)
-        CACHE[path] = await promise.json()
+        if (!PROMISES[path]) {
+            const promise = fetch(path + "?cb=" + CB)
+            PROMISES[path] = promise
+            CACHE[path] = await (await promise).json()
+        } else {
+            await PROMISES[path]
+        }
     }
     return CACHE[path]
 }
 
-(async function() {
-    GALLERY_STATE.dirIndex = await fetchJson("images/dir_index.json")
-})()
+fetchJson("images/dir_index.json")
+fetchJson("https://archiv1.derrosarotepanzer.com/images/2025/01/entry_index.json")
+
 </script>
 
 <div class="container">
@@ -79,7 +84,7 @@ lightbox.init()
 window.lightbox = lightbox
 </script>
 
-<script type="text/javascript" src="/assets/app.js?cb=19"></script>
+<script type="text/javascript" src="/assets/app.js?cb=20"></script>
 
 <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/photoswipe.css">
 

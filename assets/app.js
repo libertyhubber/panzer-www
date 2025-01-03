@@ -5,9 +5,6 @@ const THUMBNAIL_SIZE = 150
 const THUMBNAIL_MARGIN = 16
 const THUMBNAIL_MSIZE = THUMBNAIL_SIZE + THUMBNAIL_MARGIN
 
-// const CB = Math.random().toString(36).slice(2); // Cachebust
-const CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
-
 const IMG_HOSTS = {};
 
 if (!location.host.startsWith("localhost")) {
@@ -29,15 +26,14 @@ if (!location.host.startsWith("localhost")) {
     });
 }
 
-Object.assign(GALLERY_STATE, {
-    // dirIndex fetch triggered from index.html
-    // 'dirIndex': null, // {dirName: numEntries, ....}
+const GALLERY_STATE = {
+    'dirIndex': null, // {dirName: numEntries, ....}
     'dirNames': null, // [dirName, ....]
     'totalEntries': -1,
     'debounceTimeout': null,
     'lastRenderState': null,
     'dataSource': null,
-})
+}
 
 async function updateDataSources(itemIndex) {
     // scan through directories
@@ -63,7 +59,7 @@ async function updateDataSources(itemIndex) {
 
         var host = IMG_HOSTS[dirName.split("/")[0]] || fallbackHost;
 
-        var dirURL = `${host}/images/${dirName}/entry_index.json?cb=${CB}`
+        var dirURL = `${host}/images/${dirName}/entry_index.json`
         entryPromises.push(fetchJson(dirURL))
 
         var thumbSrc = `${host}/images/${dirName}/thumbnails.jpg?cb=${CB}`
@@ -241,11 +237,7 @@ function initHandlers() {
 }
 
 async function initGallery() {
-    if (!GALLERY_STATE.dirIndex) {
-        // wait for dirIndex fetch from index.html
-        // GALLERY_STATE.dirIndex = await fetchJson("images/dir_index.json")
-        return setTimeout(initGallery, 50)
-    }
+    GALLERY_STATE.dirIndex = await fetchJson("images/dir_index.json")
     GALLERY_STATE.dirNames = []
 
     GALLERY_STATE.totalEntries = 0;
