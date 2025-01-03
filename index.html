@@ -7,7 +7,7 @@
 
     <link rel="shortcut icon" type="image/png" sizes="64x64" href="assets/favicon64.png">
 
-    <link rel="stylesheet" href="/assets/style.css?cb=19" />
+    <link rel="stylesheet" href="/assets/style.css?cb=21" />
 </head>
 <body>
 <div class="container">
@@ -50,14 +50,11 @@ const lightbox = new PhotoSwipeLightbox({
   pswpModule: () => import('/assets/photoswipe.esm.js'),
   loop: false,
 })
-lightbox.on('change', panzerApp.updateGalleryHandler)
-lightbox.init()
-window.lightbox = lightbox
-</script>
 
-<script type="text/javascript">
+window.lightbox = lightbox;
+
 // const CB = Math.random().toString(36).slice(2); // Cachebust
-const CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
+window.CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
 
 const LOADING = {}
 const CACHE = {}
@@ -80,17 +77,25 @@ async function fetchJson(path) {
     return CACHE[path]
 }
 
+window.fetchJson = fetchJson;
+
 (async function(){
-    await Promise.all([
-        fetchJson("images/dir_index.json"),
-        fetchJson("https://archiv1.derrosarotepanzer.com/images/2025/01/entry_index.json"),
-    ])
+    await fetchJson("images/dir_index.json")
 })()
+
+const appNode = document.createElement("script")
+appNode.setAttribute("type", "text/javascript")
+appNode.setAttribute("src", "/assets/app.js?cb=21")
+document.body.appendChild(appNode)
+
+appNode.addEventListener("load", function(){
+    lightbox.on('change', panzerApp.updateGalleryHandler)
+    lightbox.init()
+})
 </script>
 
-<script type="text/javascript" src="/assets/app.js?cb=21"></script>
-
 <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/photoswipe.css">
-<link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/icons.css?cb=19" />
+<link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/icons.css?cb=21" />
+
 </body>
 </html>
