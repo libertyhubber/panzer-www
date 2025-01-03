@@ -66,19 +66,17 @@ const LOADING = {}
 const CACHE = {}
 
 async function fetchJson(path) {
-    if (!CACHE[path]) {
-        if (!LOADING[path]) {
-            LOADING[path] = 1
-            const promise = await fetch(path + "?cb=" + CB)
-            CACHE[path] = await promise.json()
-        } else {
-            // wait for cache population and try again
-            await new Promise((resolve, reject) => {
-                return setTimeout(async function() {resolve(await fetchJson(path))}, 50)
-            })
-        }
+  if (!CACHE[path]) {
+    if (LOADING[path]) {
+      return await new Promise((resolve, reject) => {
+          setTimeout(async function() {resolve(await fetchJson(path))}, 50)
+      })
     }
-    return CACHE[path]
+    LOADING[path] = 1
+    const promise = await fetch(path + "?cb=" + CB)
+    CACHE[path] = await promise.json()
+  }
+  return CACHE[path]
 }
 
 window.fetchJson = fetchJson;
@@ -93,10 +91,36 @@ appNode.addEventListener("load", function(){
     lightbox.init()
 })
 
+window.IMG_HOSTS = {
+    "2021": "https://archiv0.derrosarotepanzer.com",
+    "2022": "https://archiv0.derrosarotepanzer.com",
+    "2023": "https://archiv0.derrosarotepanzer.com",
+    "2024": "https://archiv0.derrosarotepanzer.com",
+    "2025": "https://archiv1.derrosarotepanzer.com",
+    "2026": "https://archiv2.derrosarotepanzer.com",
+    "2027": "https://archiv3.derrosarotepanzer.com",
+    "2028": "https://archiv4.derrosarotepanzer.com",
+    "2029": "https://archiv5.derrosarotepanzer.com",
+    "2030": "https://archiv6.derrosarotepanzer.com",
+    "2031": "https://archiv7.derrosarotepanzer.com",
+    "2032": "https://archiv8.derrosarotepanzer.com",
+    "2033": "https://archiv9.derrosarotepanzer.com",
+};
+
+const yyyy1 = new Date().getFullYear();
+const month = new Date().getMonth() + 1;
+const mm1 = month.toString().padStart(2, '0')
+
+const yyyy0 = (month == 1) ? yyyy1 - 1 : yyyy1
+const mm0 = (month == 1) ? "12" : (month - 1).toString().padStart(2, '0')
+
+const archive1 = IMG_HOSTS[yyyy1]
+const archive0 = IMG_HOSTS[yyyy0]
+
 await Promise.all([
     fetchJson("images/dir_index.json"),
-    fetchJson("https://archiv1.derrosarotepanzer.com/images/2025/01/entry_index.json"),
-    fetchJson("https://archiv0.derrosarotepanzer.com/images/2024/12/entry_index.json"),
+    fetchJson(`${archive1}/images/${yyyy1}/${mm1}/entry_index.json`),
+    fetchJson(`${archive0}/images/${yyyy0}/${mm0}/entry_index.json`),
 ])
 </script>
 

@@ -21,11 +21,17 @@ import os
 import sys
 import copy
 import json
+import shutil
 import pathlib as pl
 import datetime as dt
+import contextlib
+import subprocess as sp
+
 import telethon
 
 from PIL import Image
+
+import ingest_uploads
 
 # Load environment variables
 APP_TITLE = 'panzerimgsync'
@@ -47,6 +53,18 @@ client = telethon.TelegramClient(APP_TITLE, API_ID, API_HASH)
 
 
 MESSAGES_CACHE_PATH = ROOT_DIR / "scripts" / "telegram_messages_cache.json"
+
+
+@contextlib.contextmanager
+def change_dir(new_dir: pl.Path):
+    old_dir = os.getcwd()
+
+    os.chdir(new_dir)
+
+    try:
+        yield
+    finally:
+        os.chdir(old_dir)
 
 
 def mk_img_path(fname: str) -> pl.Path:
@@ -246,6 +264,23 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
     return new_messages
 
 
+IMG_REPOS = {
+    "2021": "panzer-archiv-00",
+    "2022": "panzer-archiv-00",
+    "2023": "panzer-archiv-00",
+    "2024": "panzer-archiv-00",
+    "2025": "panzer-archiv-01",
+    "2026": "panzer-archiv-02",
+    "2027": "panzer-archiv-03",
+    "2028": "panzer-archiv-04",
+    "2029": "panzer-archiv-05",
+    "2030": "panzer-archiv-06",
+    "2031": "panzer-archiv-07",
+    "2032": "panzer-archiv-08",
+    "2033": "panzer-archiv-09",
+}
+
+
 def main(args: list[str]) -> int:
     old_messages = load_last_messages()
 
@@ -255,6 +290,58 @@ def main(args: list[str]) -> int:
 
     if old_messages != new_messages:
         dump_messages(new_messages)
+
+    cur_dir = pl.Path(".").absolute()
+    new_img_dirs = list((cur_dir / "images").glob("20*/*"))
+    if not new_img_dirs:
+        return
+
+    www_img_dir = new_img_dirs[0]
+
+    year  = www_img_dir.parent.name
+    month = www_img_dir.name
+
+    repos_dir = cur_dir.parent
+    archiv_repo  = repos_dir / IMG_REPOS[year]
+
+    archiv_img_dir = archiv_repo / "images" / year / month
+    if archiv_img_dir.exists():
+        for archiv_fpath in archiv_img_dir.iterdir():
+            shutil.copyfile(archiv_fpath, www_img_dir / archiv_fpath.name)
+
+    ingest_uploads.update_indexes()
+    ingest_uploads.update_thumbnails()
+
+    if not archiv_img_dir.exists():
+        archiv_img_dir.mkdir(parents=True, exist_ok=True)
+
+    def ignore_existing(src_dir, entry_names):
+        ignore = set()
+        for name in entry_names:
+            www_path = www_img_dir / name
+            archiv_path = archiv_img_dir / name
+
+            is_up_to_date = (
+                archiv_path.exists()
+                and www_path.stat().st_size == archiv_path.stat().st_size
+            )
+            if is_up_to_date:
+                ignore.add(name)
+
+        return ignore
+
+    breakpoint()
+    shutil.copytree(www_img_dir, archiv_img_dir, ignore=ignore_existing, dirs_exist_ok=True)
+
+    with change_dir(archiv_repo):
+        sp.call(["git", "add", str(archiv_fpath.parent)])
+        sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
+
+    shutil.rmtree(www_img_dir)
+
+    sp.call(["git", "checkout", str(www_img_dir)])
+    sp.call(["git", "add", str(cur_dir / "images")])
+    sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
 
     return 0
 

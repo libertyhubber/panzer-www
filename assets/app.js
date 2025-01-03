@@ -5,27 +5,6 @@ const THUMBNAIL_SIZE = 150
 const THUMBNAIL_MARGIN = 16
 const THUMBNAIL_MSIZE = THUMBNAIL_SIZE + THUMBNAIL_MARGIN
 
-const IMG_HOSTS = {
-    "2021": "https://archiv0.derrosarotepanzer.com",
-    "2022": "https://archiv0.derrosarotepanzer.com",
-    "2023": "https://archiv0.derrosarotepanzer.com",
-    "2024": "https://archiv0.derrosarotepanzer.com",
-    "2025": "https://archiv1.derrosarotepanzer.com",
-    "2026": "https://archiv1.derrosarotepanzer.com",
-    "2027": "https://archiv2.derrosarotepanzer.com",
-    "2028": "https://archiv2.derrosarotepanzer.com",
-    "2029": "https://archiv3.derrosarotepanzer.com",
-    "2030": "https://archiv3.derrosarotepanzer.com",
-    "2031": "https://archiv4.derrosarotepanzer.com",
-    "2032": "https://archiv4.derrosarotepanzer.com",
-    "2033": "https://archiv5.derrosarotepanzer.com",
-    "2034": "https://archiv5.derrosarotepanzer.com",
-};
-
-// if (location.host.startsWith("localhost")) {
-//     Object.assign(IMG_HOSTS, {});
-// }
-
 const GALLERY_STATE = {
     'dirIndex': null, // {dirName: numEntries, ....}
     'dirNames': null, // [dirName, ....]

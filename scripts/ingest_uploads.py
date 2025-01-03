@@ -13,6 +13,7 @@ import collections
 import datetime as dt
 from PIL import Image
 
+import panzer_imgsync
 
 DEBUG_ENTRY_INDEX = True
 
@@ -24,12 +25,12 @@ def update_thumbnails():
     for entry_index_path in sorted(pl.Path("images").glob("*/*/entry_index.json")):
         dirpath = entry_index_path.parent
         thumbnails_path = dirpath / "thumbnails.jpg"
-        is_thumbnails_fresh = (
-            thumbnails_path.exists()
-            and thumbnails_path.stat().st_mtime >= entry_index_path.stat().st_mtime
-        )
-        if is_thumbnails_fresh:
-            continue
+        # is_thumbnails_fresh = (
+        #     thumbnails_path.exists()
+        #     and thumbnails_path.stat().st_mtime >= entry_index_path.stat().st_mtime
+        # )
+        # if is_thumbnails_fresh:
+        #     continue
 
         with entry_index_path.open('rb') as fobj:
             entry_index = json.loads(fobj.read().decode("utf-8"))
@@ -72,21 +73,26 @@ def update_indexes():
         dirpath = str(fpath.parent)[len("images/"):]
         img_by_dir[dirpath].append(fpath)
 
-    dir_index_dicts = {
-        dirpath: len(img_paths)
-        for dirpath, img_paths in img_by_dir.items()
-    }
-
-    dir_index_data = json.dumps(dir_index_dicts, indent=2).encode("utf-8")
     dir_index_path = pl.Path("images") / "dir_index.json"
+    if dir_index_path.exists():
+        with dir_index_path.open('rb') as fobj:
+            merged_dir_index_dicts = json.load(fobj)
+
+    else:
+        merged_dir_index_dicts = {}
+
+    for dirpath, img_paths in img_by_dir.items():
+        merged_dir_index_dicts[dirpath] = len(img_paths)
+
+    merged_dir_index_data = json.dumps(merged_dir_index_dicts, indent=2).encode("utf-8")
 
     is_dir_index_fresh = (
         dir_index_path.exists()
-        and dir_index_path.open('rb').read() == dir_index_data
+        and dir_index_path.open('rb').read() == merged_dir_index_data
     )
     if not is_dir_index_fresh:
         with dir_index_path.open('wb') as fobj:
-            fobj.write(dir_index_data)
+            fobj.write(merged_dir_index_data)
 
     for dirname, img_paths in img_by_dir.items():
         dirpath = pl.Path("images").joinpath(*dirname.split("/"))
@@ -150,60 +156,7 @@ def mk_datestr(datestr=None):
     return datestr
 
 
-
-def ingest_uploads():
-    extensions = ("jpg", "jpeg", "png", "webp")
-    directories = (".", "images", "upload")
-
-    upload_paths = []
-
-    for directory in directories:
-        for fpath in pl.Path(directory).glob("*.*"):
-            basename, suffix = fpath.name.rsplit(".", 1)
-            if basename.startswith("favico"):
-                continue
-            if suffix.lower() in extensions:
-                upload_paths.append(fpath)
-
-    for src_fpath in upload_paths:
-        basename, suffix = src_fpath.name.rsplit(".", 1)
-
-        if match := re.search(r"20[0-9]{2}-[0-1][0-9]-[0-3][0-9]", src_fpath.name):
-            datestr = mk_datestr(src_fpath.name[:10])
-            tgt_fname = src_fpath.name
-        else:
-            datestr = mk_datestr()
-
-            with src_fpath.open(mode="rb") as fobj:
-                digest = hl.sha256(fobj.read()).hexdigest()[:15]
-            tgt_fname = datestr + "_" + digest + src_fpath.name
-
-        year = datestr[0:4]
-        month = datestr[4:6]
-
-        dirpath = pl.Path("images") / year / month
-        dirpath.mkdir(parents=True, exist_ok=True)
-
-        tgt_fname = tgt_fname.rsplit(".", 1)[0] + ".jpg"
-        tgt_fpath = dirpath / tgt_fname
-
-        print(src_fpath, "->", tgt_fpath, src_fpath.stat().st_mtime)
-
-        if suffix.lower() in ("png", "webp"):
-            with Image.open(src_fpath) as png_img:
-                jpg_img = Image.new('RGB', png_img.size)
-                jpg_img.paste(png_img.copy())
-                jpg_img.save(tgt_fpath, "JPEG", quality=95, optimize=True, progressive=True)
-            src_fpath.unlink()
-        else:
-            src_fpath.rename(tgt_fpath)
-
-        sp.call(["git", "add", str(tgt_fpath.absolute())])
-        sp.call(["git", "rm", str(src_fpath.absolute())])
-
-
-def main(args: list[str]) -> int:
-    ingest_uploads()
+def main(args: list[str] = []) -> int:
     update_indexes()
     update_thumbnails()
     return 0
