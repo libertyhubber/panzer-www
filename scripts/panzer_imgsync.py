@@ -341,6 +341,7 @@ def main(args: list[str]) -> int:
 
     sp.call(["git", "checkout", str(www_img_dir)])
     sp.call(["git", "add", str(cur_dir / "images")])
+    sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
     sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
     sp.call(["git", "push"])
 
