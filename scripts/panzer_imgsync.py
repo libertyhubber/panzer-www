@@ -330,15 +330,19 @@ def main(args: list[str]) -> int:
 
         return ignore
 
+    print(f"cp -R {www_img_dir} {archiv_img_dir}")
     shutil.copytree(www_img_dir, archiv_img_dir, ignore=ignore_existing, dirs_exist_ok=True)
 
     with change_dir(archiv_repo):
+        print(f"git add&commit {archiv_img_dir}")
         sp.call(["git", "add", str(archiv_fpath.parent)])
         sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
         sp.call(["git", "push"])
 
+    print(f"rm -rf {www_img_dir}")
     shutil.rmtree(www_img_dir)
 
+    print(f"git add&commit {cur_dir}")
     sp.call(["git", "checkout", str(www_img_dir)])
     sp.call(["git", "add", str(cur_dir / "images")])
     sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
