@@ -305,17 +305,16 @@ def main(args: list[str]) -> int:
     archiv_repo  = repos_dir / IMG_REPOS[year]
 
     archiv_img_dir = archiv_repo / "images" / year / month
-    if archiv_img_dir.exists():
-        for archiv_fpath in archiv_img_dir.iterdir():
-            shutil.copyfile(archiv_fpath, www_img_dir / archiv_fpath.name)
+    if not archiv_img_dir.exists():
+        archiv_img_dir.mkdir(parents=True, exist_ok=True)
+
+    for archiv_fpath in archiv_img_dir.iterdir():
+        shutil.copyfile(archiv_fpath, www_img_dir / archiv_fpath.name)
 
     ingest_uploads.update_indexes()
     ingest_uploads.update_thumbnails()
 
-    if not archiv_img_dir.exists():
-        archiv_img_dir.mkdir(parents=True, exist_ok=True)
-
-    def ignore_existing(src_dir, entry_names):
+    def _ignore_existing(src_dir, entry_names):
         ignore = set()
         for name in entry_names:
             www_path = www_img_dir / name
@@ -331,11 +330,11 @@ def main(args: list[str]) -> int:
         return ignore
 
     print(f"cp -R {www_img_dir} {archiv_img_dir}")
-    shutil.copytree(www_img_dir, archiv_img_dir, ignore=ignore_existing, dirs_exist_ok=True)
+    shutil.copytree(www_img_dir, archiv_img_dir, ignore=_ignore_existing, dirs_exist_ok=True)
 
     with change_dir(archiv_repo):
         print(f"git add&commit {archiv_img_dir}")
-        sp.call(["git", "add", str(archiv_fpath.parent)])
+        sp.call(["git", "add", str(archiv_img_dir)])
         sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
         sp.call(["git", "push"])
 
@@ -344,7 +343,7 @@ def main(args: list[str]) -> int:
 
     print(f"git add&commit {cur_dir}")
     sp.call(["git", "checkout", str(www_img_dir)])
-    sp.call(["git", "add", str(cur_dir / "images")])
+    sp.call(["git", "add", str(cur_dir / "images" / "dir_index.json")])
     sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
     sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
     sp.call(["git", "push"])
