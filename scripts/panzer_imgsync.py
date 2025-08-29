@@ -151,10 +151,10 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
     if len(old_messages) == 0:
         min_id = 0
     else:
-        lookback = 20      # so we update the fwd and rct fields
+        lookback = 50      # so we update the fwd and rct fields
         min_id = max(map(int, old_messages.keys())) - lookback
 
-    limit = 100
+    limit = 200
 
     new_messages = copy.deepcopy(old_messages)
 
