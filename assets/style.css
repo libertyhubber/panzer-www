@@ -114,9 +114,13 @@ body {
   height: 30px;
 
   filter: contrast(1);
-  background: #FAE;
+  background-color: #FAE;
   border-radius: 20px;
 }
+.nav .support.paypal::after {
+  background-color: #0000;
+}
+
 .nav .support::before {
 	content: "";
   display: block;
