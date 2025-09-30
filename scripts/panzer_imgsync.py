@@ -1,3 +1,12 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#   "pudb", "ipython",
+#   "pillow>=11.1.0",
+#   "telethon>=1.39.0"
+# ]
+# ///
 """
 Implements a telegram bot.
 
@@ -14,6 +23,10 @@ and write them to the "upload" directory.
 
 The filenames should use the date (in isoformat) as a prefix
 and the sha256 hash of the file contents as a suffix.
+
+Usage:
+
+    ./scripts/panter_imgsync.py [-h|--help] [--force]
 """
 
 import io
@@ -30,8 +43,6 @@ import subprocess as sp
 import telethon
 
 from PIL import Image
-
-import ingest_uploads
 
 # Load environment variables
 APP_TITLE = 'panzerimgsync'
@@ -282,6 +293,10 @@ IMG_REPOS = {
 
 
 def main(args: list[str]) -> int:
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        return 0
+
     old_messages = load_last_messages()
 
     with client:
@@ -293,28 +308,28 @@ def main(args: list[str]) -> int:
 
     cur_dir = pl.Path(".").absolute()
     new_img_dirs = list((cur_dir / "images").glob("20*/*"))
-    if not new_img_dirs:
-        return
+    if new_img_dirs:
+        www_img_dir = new_img_dirs[0]
 
-    www_img_dir = new_img_dirs[0]
+        year  = www_img_dir.parent.name
+        month = www_img_dir.name
 
-    year  = www_img_dir.parent.name
-    month = www_img_dir.name
+        archiv_repo  = cur_dir.parent / IMG_REPOS[year]
 
-    repos_dir = cur_dir.parent
-    archiv_repo  = repos_dir / IMG_REPOS[year]
+        archiv_img_dir = archiv_repo / "images" / year / month
+        if not archiv_img_dir.exists():
+            archiv_img_dir.mkdir(parents=True, exist_ok=True)
 
-    archiv_img_dir = archiv_repo / "images" / year / month
-    if not archiv_img_dir.exists():
-        archiv_img_dir.mkdir(parents=True, exist_ok=True)
+        for archiv_fpath in archiv_img_dir.iterdir():
+            shutil.copyfile(archiv_fpath, www_img_dir / archiv_fpath.name)
+    elif "--force" in args:
+        www_img_dir = None
+        archiv_repo  = max(cur_dir.parent.glob("panzer-archiv*"))
+        archiv_img_dir = max((archiv_repo / "images").glob("*/*"))
+    else:
+        return 0
 
-    for archiv_fpath in archiv_img_dir.iterdir():
-        shutil.copyfile(archiv_fpath, www_img_dir / archiv_fpath.name)
-
-    ingest_uploads.update_indexes()
-    ingest_uploads.update_thumbnails()
-
-    def _ignore_existing(src_dir, entry_names):
+    def _ignore_existing(src_dir, entry_names) -> set:
         ignore = set()
         for name in entry_names:
             www_path = www_img_dir / name
@@ -329,20 +344,27 @@ def main(args: list[str]) -> int:
 
         return ignore
 
-    print(f"cp -R {www_img_dir} {archiv_img_dir}")
-    shutil.copytree(www_img_dir, archiv_img_dir, ignore=_ignore_existing, dirs_exist_ok=True)
+    if www_img_dir:
+        print(f"cp -R {www_img_dir} {archiv_img_dir}")
+        shutil.copytree(www_img_dir, archiv_img_dir, ignore=_ignore_existing, dirs_exist_ok=True)
 
     with change_dir(archiv_repo):
-        print(f"git add&commit {archiv_img_dir}")
-        sp.call(["git", "add", str(archiv_img_dir)])
+        import ingest_uploads
+        ingest_uploads.update_indexes(archiv_repo)
+        ingest_uploads.update_thumbnails(archiv_repo)
+
+        print(f"git add&commit {archiv_repo}")
+        sp.call(["git", "add", "images/"])
         sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
         sp.call(["git", "push"])
 
-    print(f"rm -rf {www_img_dir}")
-    shutil.rmtree(www_img_dir)
-
     print(f"git add&commit {cur_dir}")
-    sp.call(["git", "checkout", str(www_img_dir)])
+
+    if www_img_dir:
+        print(f"rm -rf {www_img_dir}")
+        shutil.rmtree(www_img_dir)
+        sp.call(["git", "checkout", str(www_img_dir)])
+
     sp.call(["git", "add", str(cur_dir / "images" / "dir_index.json")])
     sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
     sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])

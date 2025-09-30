@@ -13,16 +13,17 @@ import collections
 import datetime as dt
 from PIL import Image
 
-import panzer_imgsync
-
 DEBUG_ENTRY_INDEX = True
 
 
 THUMBNAIL_SIZE = 150
 
 
-def update_thumbnails():
-    for entry_index_path in sorted(pl.Path("images").glob("*/*/entry_index.json")):
+def update_thumbnails(archive_repo_dir: pl.Path):
+    archiv_img_dir = archive_repo_dir / "images"
+    assert archiv_img_dir.exists(), archiv_img_dir
+
+    for entry_index_path in sorted(archiv_img_dir.glob("*/*/entry_index.json")):
         dirpath = entry_index_path.parent
         thumbnails_path = dirpath / "thumbnails.jpg"
         # is_thumbnails_fresh = (
@@ -64,42 +65,45 @@ def update_thumbnails():
         thumbnails_image.save(str(thumbnails_path), "JPEG", quality=75, optimize=True, progressive=True)
 
 
-def update_indexes():
+def update_indexes(archive_repo_dir: pl.Path) -> None:
+    archiv_img_dir = archive_repo_dir / "images"
+    assert archiv_img_dir.exists(), archiv_img_dir
+
     img_by_dir = collections.defaultdict(list)
-    for fpath in sorted(pl.Path("images").glob("**/*.jpg")):
+    for fpath in sorted(archiv_img_dir.glob("**/*.jpg")):
         if fpath.name == "thumbnails.jpg":
             continue
 
-        dirpath = str(fpath.parent)[len("images/"):]
-        img_by_dir[dirpath].append(fpath)
+        yyyy_mm_dirpath = str(fpath.parent).split("images/", maxsplit=1)[-1]
+        assert re.match(r"\d{4}/\d{2}", yyyy_mm_dirpath), yyyy_mm_dirpath
+        img_by_dir[yyyy_mm_dirpath].append(fpath)
 
-    dir_index_path = pl.Path("images") / "dir_index.json"
+    dir_index_path = archiv_img_dir / "dir_index.json"
     if dir_index_path.exists():
-        with dir_index_path.open('rb') as fobj:
+        with dir_index_path.open(mode='rb') as fobj:
             merged_dir_index_dicts = json.load(fobj)
-
     else:
         merged_dir_index_dicts = {}
 
-    for dirpath, img_paths in img_by_dir.items():
-        merged_dir_index_dicts[dirpath] = len(img_paths)
+    for yyyy_mm_dirpath, img_paths in img_by_dir.items():
+        merged_dir_index_dicts[yyyy_mm_dirpath] = len(img_paths)
 
     merged_dir_index_data = json.dumps(merged_dir_index_dicts, indent=2).encode("utf-8")
 
     is_dir_index_fresh = (
         dir_index_path.exists()
-        and dir_index_path.open('rb').read() == merged_dir_index_data
+        and dir_index_path.open(mode='rb').read() == merged_dir_index_data
     )
     if not is_dir_index_fresh:
-        with dir_index_path.open('wb') as fobj:
+        with dir_index_path.open(mode='wb') as fobj:
             fobj.write(merged_dir_index_data)
 
-    for dirname, img_paths in img_by_dir.items():
-        dirpath = pl.Path("images").joinpath(*dirname.split("/"))
+    for yyyy_mm_dirpath, img_paths in img_by_dir.items():
+        dirpath = archiv_img_dir.joinpath(*yyyy_mm_dirpath.split("/"))
         entry_index_path = dirpath / "entry_index.json"
 
         if entry_index_path.exists():
-            with entry_index_path.open('rb') as fobj:
+            with entry_index_path.open(mode='rb') as fobj:
                 old_entry_index_data = fobj.read()
                 old_entry_index = json.loads(old_entry_index_data.decode("utf-8"))
         else:
@@ -139,7 +143,7 @@ def update_indexes():
         )
         if old_entry_index_data != new_entry_index_data:
             print("updating index   ", entry_index_path)
-            with entry_index_path.open('wb') as fobj:
+            with entry_index_path.open(mode='wb') as fobj:
                 fobj.write(new_entry_index_data)
 
 
