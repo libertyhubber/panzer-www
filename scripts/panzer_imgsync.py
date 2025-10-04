@@ -358,12 +358,25 @@ def main(args: list[str]) -> int:
         sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
         sp.call(["git", "push"])
 
-    print(f"git add&commit {cur_dir}")
+    print("compile dir_index.json")
 
     if www_img_dir:
         print(f"rm -rf {www_img_dir}")
         shutil.rmtree(www_img_dir)
         sp.call(["git", "checkout", str(www_img_dir)])
+
+    dir_index = {}
+    for year, repo in IMG_REPOS.items():
+        repo_dir = cur_dir.parent / repo
+        if repo_dir.exists():
+            repo_dir_index_path = repo_dir / "images" / "dir_index.json"
+            with repo_dir_index_path.open() as fobj:
+                dir_index.update(json.load(fobj))
+
+    with (cur_dir / "images" / "dir_index.json").open(mode="w") as fobj:
+        json.dump(fobj, dir_index, sort_keys=True)
+
+    print(f"git add&commit {cur_dir}")
 
     sp.call(["git", "add", str(cur_dir / "images" / "dir_index.json")])
     sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
