@@ -31,6 +31,7 @@ Usage:
 
 import io
 import os
+import re
 import sys
 import copy
 import json
@@ -292,11 +293,7 @@ IMG_REPOS = {
 }
 
 
-def main(args: list[str]) -> int:
-    if "-h" in args or "--help" in args:
-        print(__doc__)
-        return 0
-
+def _update_images(args: list[str]) -> tuple[pl.Path, pl.Path]:
     old_messages = load_last_messages()
 
     with client:
@@ -327,7 +324,7 @@ def main(args: list[str]) -> int:
         archiv_repo  = max(cur_dir.parent.glob("panzer-archiv*"))
         archiv_img_dir = max((archiv_repo / "images").glob("*/*"))
     else:
-        return 0
+        return (None, None)
 
     def _ignore_existing(src_dir, entry_names) -> set:
         ignore = set()
@@ -348,6 +345,35 @@ def main(args: list[str]) -> int:
         print(f"cp -R {www_img_dir} {archiv_img_dir}")
         shutil.copytree(www_img_dir, archiv_img_dir, ignore=_ignore_existing, dirs_exist_ok=True)
 
+    return (www_img_dir, archiv_repo)
+
+
+def _update_dir_index(www_img_dir):
+    if www_img_dir:
+        print(f"rm -rf {www_img_dir}")
+        shutil.rmtree(www_img_dir)
+        sp.call(["git", "checkout", str(www_img_dir)])
+
+    cur_dir = pl.Path(".").absolute()
+    dir_index = {}
+    for year, repo in IMG_REPOS.items():
+        repo_dir = cur_dir.parent / repo
+        if repo_dir.exists():
+            repo_dir_index_path = repo_dir / "images" / "dir_index.json"
+            with repo_dir_index_path.open() as fobj:
+                dir_index.update(json.load(fobj))
+
+    dir_index_path = cur_dir / "images" / "dir_index.json"
+    with dir_index_path.open(mode="r") as fobj:
+        if dir_index == json.load(fobj):
+            return
+
+    with dir_index_path.open(mode="w") as fobj:
+        print("writing dir_index.json")
+        json.dump(dir_index, fobj, sort_keys=True, indent=2)
+
+
+def _commit_archive(archiv_repo):
     with change_dir(archiv_repo):
         import ingest_uploads
         ingest_uploads.update_indexes(archiv_repo)
@@ -358,33 +384,33 @@ def main(args: list[str]) -> int:
         sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
         sp.call(["git", "push"])
 
-    print("compile dir_index.json")
 
-    if www_img_dir:
-        print(f"rm -rf {www_img_dir}")
-        shutil.rmtree(www_img_dir)
-        sp.call(["git", "checkout", str(www_img_dir)])
+def _commit_www():
+    cur_dir = pl.Path(".").absolute()
 
-    dir_index = {}
-    for year, repo in IMG_REPOS.items():
-        repo_dir = cur_dir.parent / repo
-        if repo_dir.exists():
-            repo_dir_index_path = repo_dir / "images" / "dir_index.json"
-            with repo_dir_index_path.open() as fobj:
-                dir_index.update(json.load(fobj))
+    result = sp.run(["git", "status"], capture_output=True, text=True)
+    assert result.returncode == 0
 
-    with (cur_dir / "images" / "dir_index.json").open(mode="w") as fobj:
-        json.dump(fobj, dir_index, sort_keys=True)
+    modified_files = set(re.findall(r"modified:\s+(.+)", result.stdout))
+    if "images/dir_index.json" in modified_files:
+        print(f"git add&commit {cur_dir}")
+        sp.call(["git", "add", str(cur_dir / "images" / "dir_index.json")])
+        sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
+        sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
+        sp.call(["git", "push"])
 
-    print(f"git add&commit {cur_dir}")
 
-    sp.call(["git", "add", str(cur_dir / "images" / "dir_index.json")])
-    sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
-    sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
-    sp.call(["git", "push"])
+def main(args: list[str]) -> int:
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        return 0
 
+    www_img_dir, archiv_repo = _update_images(args)
+    if archiv_repo:
+        _commit_archive(archiv_repo)
+    _update_dir_index(www_img_dir)
+    _commit_www()
     return 0
-
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))
