@@ -28,7 +28,7 @@ html: index.html media.html
 
 .PHONY: serve
 serve:
-	.venv/bin/python3 -m http.server 8080
+	.venv/bin/python3 -m http.server 8082
 
 
 .PHONY: watch
