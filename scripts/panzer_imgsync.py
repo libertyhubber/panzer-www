@@ -41,10 +41,6 @@ import datetime as dt
 import contextlib
 import subprocess as sp
 
-import telethon
-
-from PIL import Image
-
 # Load environment variables
 APP_TITLE = 'panzerimgsync'
 API_ID = os.environ.get('PANZER_IMGSYNC_API_ID')
@@ -61,10 +57,17 @@ CHANNEL_NAME = os.environ.get('PANZER_IMGSYNC_CHANNEL', "@RosaroterPanzerBackup"
 ROOT_DIR = pl.Path(__file__).parent.parent
 IMAGES_DIR = ROOT_DIR / "images"
 
-client = telethon.TelegramClient(APP_TITLE, API_ID, API_HASH)
-
-
 MESSAGES_CACHE_PATH = ROOT_DIR / "scripts" / "telegram_messages_cache.json"
+
+_CLIENT = None
+
+def init_telethon_client() -> "telethon.TelegramClient":
+    global _CLIENT
+
+    import telethon
+    if _CLIENT is None:
+        _CLIENT = telethon.TelegramClient(APP_TITLE, API_ID, API_HASH)
+    return _CLIENT
 
 
 @contextlib.contextmanager
@@ -107,6 +110,8 @@ def dump_messages(messages: dict[int, dict]) -> None:
 
 
 def digest_img(data: bytes, ) -> str:
+    from PIL import Image
+
     img = Image.open(io.BytesIO(data))
     img = img.resize((4, 4), Image.Resampling.LANCZOS)
     img = img.convert('P', palette=Image.ADAPTIVE, colors=8)
@@ -156,6 +161,7 @@ assert _parse_date("2024-09-30") == dt.date(2024, 9, 30)
 
 async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
     # Getting information about yourself
+    client = init_telethon_client()
     me = await client.get_me()
 
     # print("client id/username:", me.id, me.username, me.phone)
@@ -294,6 +300,7 @@ IMG_REPOS = {
 
 
 def _update_images(args: list[str]) -> tuple[pl.Path, pl.Path]:
+    client = init_telethon_client()
     old_messages = load_last_messages()
 
     with client:
@@ -358,8 +365,8 @@ def _update_dir_index(www_img_dir):
     dir_index = {}
     for year, repo in IMG_REPOS.items():
         repo_dir = cur_dir.parent / repo
-        if repo_dir.exists():
-            repo_dir_index_path = repo_dir / "images" / "dir_index.json"
+        repo_dir_index_path = repo_dir / "images" / "dir_index.json"
+        if repo_dir_index_path.exists():
             with repo_dir_index_path.open() as fobj:
                 dir_index.update(json.load(fobj))
 
