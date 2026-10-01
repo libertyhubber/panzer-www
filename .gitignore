@@ -1,3 +1,5 @@
 *.session
 sync.log
 *.pyc
+scripts/telegram_backfill_state.json
+scripts/telegram_backfill_state.json.tmp

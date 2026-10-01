@@ -1,69 +1,22 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pillow>=11.1.0"]
+# ///
 
-import os
-import io
+import argparse
 import re
 import sys
 import json
-import hashlib as hl
 import pathlib as pl
-import itertools as it
-import subprocess as sp
 import collections
 import datetime as dt
 from PIL import Image
 
-DEBUG_ENTRY_INDEX = True
-
-
-THUMBNAIL_SIZE = 150
-
-
-def update_thumbnails(archive_repo_dir: pl.Path):
-    archiv_img_dir = archive_repo_dir / "images"
-    assert archiv_img_dir.exists(), archiv_img_dir
-
-    for entry_index_path in sorted(archiv_img_dir.glob("*/*/entry_index.json")):
-        dirpath = entry_index_path.parent
-        thumbnails_path = dirpath / "thumbnails.jpg"
-        # is_thumbnails_fresh = (
-        #     thumbnails_path.exists()
-        #     and thumbnails_path.stat().st_mtime >= entry_index_path.stat().st_mtime
-        # )
-        # if is_thumbnails_fresh:
-        #     continue
-
-        with entry_index_path.open('rb') as fobj:
-            entry_index = json.loads(fobj.read().decode("utf-8"))
-
-        print("updating thumbnails", thumbnails_path)
-        num_cols = 10
-        num_rows = len(entry_index) // num_cols
-
-        padding_x = num_cols * 2
-        padding_y = num_rows * 2
-
-        thumbnails_width = THUMBNAIL_SIZE * num_cols + padding_x
-        thumbnails_height = THUMBNAIL_SIZE * (num_rows + 1) + padding_y
-
-        thumbnails_image = Image.new('RGB', (thumbnails_width, thumbnails_height))
-        for i, entry in enumerate(entry_index):
-            img_path = dirpath / entry['name']
-            with Image.open(img_path) as img:
-                img.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
-                thumb_width, thumb_height = img.size
-
-                if entry['w'] > entry['h']:
-                    offset_x = 0
-                    offset_y = (THUMBNAIL_SIZE - thumb_height) // 2
-                else:
-                    offset_x = (THUMBNAIL_SIZE - thumb_width) // 2
-                    offset_y = 0
-
-                thumbnails_image.paste(img.copy(), (offset_x + entry['x'], offset_y + entry['y']))
-
-        thumbnails_image.save(str(thumbnails_path), "JPEG", quality=75, optimize=True, progressive=True)
-
+if __package__:
+    from .generate_thumbnails import ROOT_DIR, update_thumbnails
+else:
+    from generate_thumbnails import ROOT_DIR, update_thumbnails
 
 def update_indexes(archive_repo_dir: pl.Path) -> None:
     archiv_img_dir = archive_repo_dir / "images"
@@ -71,7 +24,7 @@ def update_indexes(archive_repo_dir: pl.Path) -> None:
 
     img_by_dir = collections.defaultdict(list)
     for fpath in sorted(archiv_img_dir.glob("**/*.jpg")):
-        if fpath.name == "thumbnails.jpg":
+        if fpath.name == "thumbnails.jpg" or re.fullmatch(r"thumbnails-\d+\.jpg", fpath.name):
             continue
 
         yyyy_mm_dirpath = str(fpath.parent).split("images/", maxsplit=1)[-1]
@@ -113,27 +66,20 @@ def update_indexes(archive_repo_dir: pl.Path) -> None:
         new_entry_index = []
         old_entries = {entry['name']: entry for entry in old_entry_index}
 
-        for i, img_path in enumerate(reversed(img_paths)):
-            column = i % 10
-            row = i // 10
-            padding_x = column * 2
-            padding_y = row * 2
-            offset_x = padding_x + THUMBNAIL_SIZE * column
-            offset_y = padding_y + THUMBNAIL_SIZE * row
-
-            if not DEBUG_ENTRY_INDEX and img_path.name in old_entries:
-                new_entry_index.append(old_entries[img_path.name])
+        for img_path in img_paths:
+            if img_path.name in old_entries:
+                old_entry = old_entries[img_path.name]
+                img_width, img_height = old_entry['w'], old_entry['h']
             else:
                 with Image.open(img_path) as img:
                     img_width, img_height = img.size
 
-                new_entry_index.append({
-                    'x': offset_x,
-                    'y': offset_y,
-                    'w': img_width,
-                    'h': img_height,
-                    'name': img_path.name,
-                })
+            # Sprite coordinates are derived from the final local index order.
+            new_entry_index.append({
+                'w': img_width,
+                'h': img_height,
+                'name': img_path.name,
+            })
 
         new_entry_index.sort(key=lambda e: e['name'])
         new_entry_index_data = (
@@ -160,9 +106,13 @@ def mk_datestr(datestr=None):
     return datestr
 
 
-def main(args: list[str] = []) -> int:
-    update_indexes()
-    update_thumbnails()
+def main(args: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Update archive indexes and generate website-local sprite sheets.")
+    parser.add_argument("archive_repo", type=pl.Path)
+    parser.add_argument("--www-repo", type=pl.Path, default=ROOT_DIR)
+    options = parser.parse_args(args)
+    update_indexes(options.archive_repo)
+    update_thumbnails(options.archive_repo, options.www_repo)
     return 0
 
 

@@ -45,8 +45,6 @@ import subprocess as sp
 APP_TITLE = 'panzerimgsync'
 API_ID = os.environ.get('PANZER_IMGSYNC_API_ID')
 API_HASH = os.environ.get('PANZER_IMGSYNC_API_HASH')
-assert API_ID, "missing envvar: PANZER_IMGSYNC_API_ID"
-assert API_HASH, "missing envvar: PANZER_IMGSYNC_API_HASH"
 
 # BOT_NAME = os.environ.get('PANZER_IMGSYNC_BOT_NAME', "panzer_imgsync_bot")
 # BOT_TOKEN = os.environ.get('PANZER_IMGSYNC_BOT_TOKEN')
@@ -58,6 +56,7 @@ ROOT_DIR = pl.Path(__file__).parent.parent
 IMAGES_DIR = ROOT_DIR / "images"
 
 MESSAGES_CACHE_PATH = ROOT_DIR / "scripts" / "telegram_messages_cache.json"
+GALLERY_METADATA_PATH = ROOT_DIR / "images" / "telegram_metadata.json"
 
 _CLIENT = None
 
@@ -66,7 +65,9 @@ def init_telethon_client() -> "telethon.TelegramClient":
 
     import telethon
     if _CLIENT is None:
-        _CLIENT = telethon.TelegramClient(APP_TITLE, API_ID, API_HASH)
+        if not API_ID or not API_HASH:
+            raise ValueError("set PANZER_IMGSYNC_API_ID and PANZER_IMGSYNC_API_HASH")
+        _CLIENT = telethon.TelegramClient(APP_TITLE, int(API_ID), API_HASH)
     return _CLIENT
 
 
@@ -109,6 +110,34 @@ def dump_messages(messages: dict[int, dict]) -> None:
     tmp_path.rename(MESSAGES_CACHE_PATH)
 
 
+def dump_gallery_metadata(messages: dict[int, dict]) -> None:
+    """Write the Telegram fields needed by the public gallery.
+
+    A filename can occasionally occur in more than one Telegram message. In
+    that case, retain the oldest post as the original.
+    """
+    metadata = {}
+    for message_id in sorted(messages):
+        message = messages[message_id]
+        image_name = message.get('name')
+        if image_name and image_name not in metadata:
+            metadata[image_name] = [
+                message_id, message.get('trct', 0),
+                message.get('tview'), message.get('tcomments'),
+            ]
+
+    metadata_data = json.dumps(
+        metadata, sort_keys=True, separators=(',', ':')
+    ).encode('utf-8')
+    if GALLERY_METADATA_PATH.exists():
+        if GALLERY_METADATA_PATH.read_bytes() == metadata_data:
+            return
+
+    tmp_path = GALLERY_METADATA_PATH.with_suffix('.json.tmp')
+    tmp_path.write_bytes(metadata_data)
+    tmp_path.rename(GALLERY_METADATA_PATH)
+
+
 def digest_img(data: bytes, ) -> str:
     from PIL import Image
 
@@ -147,9 +176,6 @@ def test_fingerprint_image():
     assert digest_img_path(imgdir / "test_2_small.jpg") == "a9a0086dbdad"
 
 
-test_fingerprint_image()
-
-
 def _parse_date(date_str):
     date_str = date_str.replace("-", "")
     yyyy, mm, dd = date_str[0:4], date_str[4:6], date_str[6:8]
@@ -157,6 +183,16 @@ def _parse_date(date_str):
 
 
 assert _parse_date("2024-09-30") == dt.date(2024, 9, 30)
+
+
+def telegram_stats(msg) -> dict:
+    """Current totals from Telegram; absent comment/view fields remain unknown."""
+    return {
+        'tfwd': msg.forwards or 0,
+        'trct': sum(res.count for res in msg.reactions.results) if msg.reactions else 0,
+        'tview': msg.views,
+        'tcomments': msg.replies.replies if msg.replies else None,
+    }
 
 
 async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
@@ -183,7 +219,7 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
     #   within 3 days of each other
     digest_paths = {}
     for fpath in fpaths:
-        if fpath.name == "thumbnails.jpg":
+        if fpath.name == "thumbnails.jpg" or fpath.name.startswith("thumbnails-"):
             continue
 
         date = _parse_date(fpath.name)
@@ -225,15 +261,13 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
         #     for res in msg.reactions.results
         # })
 
+        stats = telegram_stats(msg)
+
         if msg.id in old_messages:
             digest = old_messages[msg.id]['dig']
             tgt_fname = old_messages[msg.id]['name']
 
-            if msg.reactions:
-                new_messages[msg.id].update({
-                    'tfwd' : msg.forwards,
-                    'trct' : sum(res.count for res in msg.reactions.results),
-                })
+            new_messages[msg.id].update(stats)
             print("old         :", msg.id, digest, tgt_fname)
             continue
 
@@ -244,16 +278,9 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
         tgt_fname = fname_prefix + "_" + str(msg.id) + "_" + digest + ".jpg"
         cur_date = _parse_date(fname_prefix)
 
-        if msg.reactions:
-            reactions = sum(res.count for res in msg.reactions.results)
-        else:
-            reactions = 0
-
-        # TODO (mb 2024-07-31): views/comments ?
         new_messages[msg.id] = {
             'name': tgt_fname,
-            'tfwd': int(msg.forwards),
-            'trct': reactions,
+            **stats,
             'dig' : digest,
         }
 
@@ -309,9 +336,14 @@ def _update_images(args: list[str]) -> tuple[pl.Path, pl.Path]:
 
     if old_messages != new_messages:
         dump_messages(new_messages)
+    dump_gallery_metadata(new_messages)
 
     cur_dir = pl.Path(".").absolute()
-    new_img_dirs = list((cur_dir / "images").glob("20*/*"))
+    new_img_dirs = [
+        directory for directory in (cur_dir / "images").glob("20*/*")
+        if any(path.suffix == ".jpg" and not path.name.startswith("thumbnails-")
+               for path in directory.iterdir())
+    ]
     if new_img_dirs:
         www_img_dir = new_img_dirs[0]
 
@@ -336,6 +368,9 @@ def _update_images(args: list[str]) -> tuple[pl.Path, pl.Path]:
     def _ignore_existing(src_dir, entry_names) -> set:
         ignore = set()
         for name in entry_names:
+            if name.startswith("thumbnails-"):
+                ignore.add(name)
+                continue
             www_path = www_img_dir / name
             archiv_path = archiv_img_dir / name
 
@@ -357,9 +392,11 @@ def _update_images(args: list[str]) -> tuple[pl.Path, pl.Path]:
 
 def _update_dir_index(www_img_dir):
     if www_img_dir:
-        print(f"rm -rf {www_img_dir}")
-        shutil.rmtree(www_img_dir)
-        sp.call(["git", "checkout", str(www_img_dir)])
+        for path in www_img_dir.iterdir():
+            if path.name.startswith("thumbnails-") or path.name == "entry_index.json":
+                continue
+            if path.is_file():
+                path.unlink()
 
     cur_dir = pl.Path(".").absolute()
     dir_index = {}
@@ -384,7 +421,7 @@ def _commit_archive(archiv_repo):
     with change_dir(archiv_repo):
         import ingest_uploads
         ingest_uploads.update_indexes(archiv_repo)
-        ingest_uploads.update_thumbnails(archiv_repo)
+        ingest_uploads.update_thumbnails(archiv_repo, ROOT_DIR)
 
         print(f"git add&commit {archiv_repo}")
         sp.call(["git", "add", "images/"])
@@ -394,15 +431,24 @@ def _commit_archive(archiv_repo):
 
 def _commit_www():
     cur_dir = pl.Path(".").absolute()
+    generated_paths = [
+        "images/dir_index.json",
+        "images/telegram_metadata.json",
+        "scripts/telegram_messages_cache.json",
+    ]
 
-    result = sp.run(["git", "status"], capture_output=True, text=True)
+    if (cur_dir / "images").exists():
+        generated_paths.append("images/")
+
+    result = sp.run(
+        ["git", "status", "--porcelain", "--", *generated_paths],
+        capture_output=True,
+        text=True,
+    )
     assert result.returncode == 0
-
-    modified_files = set(re.findall(r"modified:\s+(.+)", result.stdout))
-    if "images/dir_index.json" in modified_files:
+    if result.stdout.strip():
         print(f"git add&commit {cur_dir}")
-        sp.call(["git", "add", str(cur_dir / "images" / "dir_index.json")])
-        sp.call(["git", "add", "scripts/telegram_messages_cache.json"])
+        sp.call(["git", "add", *generated_paths])
         sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
         sp.call(["git", "push"])
 
@@ -420,4 +466,5 @@ def main(args: list[str]) -> int:
     return 0
 
 if __name__ == '__main__':
+    test_fingerprint_image()
     sys.exit(main(sys.argv[1:]))

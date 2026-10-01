@@ -20,14 +20,14 @@ body {
 	background: black;
 	font-family: sans-serif;
 	overflow-y: scroll;
-	min-height: 10000px;
+	min-height: 100vh;
 }
 
 /* element styles */
 
 .container {
 	margin: 0 auto;
-	max-width: 1080px;
+	max-width: 1260px; /* Five 236px gallery cards plus 80px side margins. */
 }
 
 #top-nav,
@@ -164,18 +164,213 @@ body {
 	background: #444;
 }
 
-.thumbnail {
-	display: inline-block;
-	position: absolute;
-	background-color: #888;
-	background-repeat: no-repeat;
-	margin: 8px;
-	width: 150px;
-	height: 150px;
+#gallery-filters {
+	width: calc(100% - 32px);
+	max-width: 1000px;
+	margin: 0 auto 1rem;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	text-align: left;
 }
 
-.thumbnail.active {
-	outline: 1px solid #888;
+#gallery-filters label {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 14px;
+	min-width: 0;
+}
+
+#gallery-filters input,
+#gallery-filters select {
+	background: #252525;
+	color: white;
+	border: 1px solid #555;
+	border-radius: 4px;
+	padding: 8px;
+	font: inherit;
+	width: 100%;
+}
+
+#gallery-filters .filter-reactions {
+	position: relative;
+	width: 170px;
+}
+
+.filter-input-prefix {
+	position: absolute;
+	left: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	color: #999;
+	pointer-events: none;
+}
+
+#filter-reactions {
+	padding-left: 90px;
+	text-align: right;
+}
+#filter-template { max-width: 230px; }
+#gallery-filters .filter-search { flex: 1 1 240px; }
+#filter-search::-webkit-search-cancel-button {
+	padding: 6px;
+	cursor: pointer;
+}
+#gallery-filters :focus-visible { outline: 2px solid #fae; }
+#filter-status { width: 100%; font-size: 14px; color: #bbb; }
+#filter-status:empty { display: none; }
+
+.gallery-item {
+	position: absolute;
+	width: 236px;
+	height: 364px;
+	padding: 8px;
+	text-align: left;
+}
+
+.thumbnail {
+	display: block;
+	position: relative;
+	background-color: #888;
+	background-repeat: no-repeat;
+	width: 220px;
+	height: 220px;
+}
+
+.thumbnail:hover,
+.thumbnail:focus-visible {
+	outline: 2px solid #fae;
+}
+
+.thumbnail-metadata {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 8px;
+	min-height: 43px;
+	padding-top: 7px;
+	font-size: 12px;
+	line-height: 18px;
+	color: #bbb;
+}
+
+.thumbnail-metadata time {
+	display: block;
+}
+
+.thumbnail-metadata > a,
+.thumbnail-metadata > .telegram-unavailable {
+	margin-left: auto;
+	text-align: right;
+}
+
+.thumbnail-stats {
+	display: flex;
+	flex: 1 0 auto;
+	justify-content: space-between;
+	gap: 4px;
+	white-space: nowrap;
+}
+
+.thumbnail-classification {
+	flex-basis: 100%;
+	min-width: 0;
+	height: 80px;
+	padding-top: 6px;
+	overflow: hidden;
+}
+
+.classification-tags {
+	display: flex;
+	flex-wrap: wrap;
+	align-content: flex-start;
+	gap: 3px;
+	height: 54px;
+	overflow: hidden;
+}
+
+.classification-tag:focus-visible {
+	outline: 1px solid #fae;
+	outline-offset: -1px;
+}
+
+.classification-tag:hover {
+	background: #444;
+}
+
+.classification-tag {
+	visibility: hidden;
+	border: 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	background: #252525;
+	border-radius: 3px;
+	padding: 0 4px;
+	overflow-wrap: anywhere;
+	max-width: 100%;
+}
+
+.classification-unavailable {
+	color: #777;
+}
+
+.reaction-count {
+	color: #fae;
+}
+
+.thumbnail-debug {
+	border: 0;
+	padding: 0;
+	background: none;
+	font: inherit;
+	cursor: pointer;
+}
+
+#image-debug-dialog {
+	width: min(800px, 90vw);
+	max-height: 85vh;
+	box-sizing: border-box;
+	padding: 20px;
+	border: 1px solid #777;
+	border-radius: 6px;
+	background: #181818;
+	color: #ddd;
+}
+
+#image-debug-dialog::backdrop {
+	background: rgb(0 0 0 / 70%);
+}
+
+#image-debug-dialog form {
+	float: right;
+}
+
+#image-debug-dialog pre {
+	clear: both;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 13px;
+	text-align: left;
+}
+
+.thumbnail-debug,
+.telegram-link {
+	color: #8ccfff;
+	text-decoration: none;
+}
+
+.thumbnail-debug:hover,
+.thumbnail-debug:focus-visible,
+.telegram-link:hover,
+.telegram-link:focus-visible {
+	text-decoration: underline;
+}
+
+.telegram-unavailable {
+	color: #777;
 }
 
 .footer {

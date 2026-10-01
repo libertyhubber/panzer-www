@@ -5,30 +5,31 @@ SHELL := /bin/bash
 
 .PHONY: sync_and_ingest
 sync_and_ingest:
-	.venv/bin/python3 scripts/panzer_imgsync.py;
+	uv run --script scripts/panzer_imgsync.py
 
 
-.PHONY: debug_ingest
-debug_ingest:
-# 	touch images/*/*/*.json
-	touch images/2024/06/*.json
-	.venv/bin/python3 scripts/ingest_uploads.py
-	ls -lh images/2024/*/thumbnails.jpg
+.PHONY: thumbnails
+thumbnails:
+	uv run --script scripts/generate_thumbnails.py
 
 
 index.html: templates/*
-	.venv/bin/python3 scripts/gen_html.py index.html
+	uv run --script scripts/gen_html.py index.html
 
 media.html: templates/*
-	.venv/bin/python3 scripts/gen_html.py media.html
+	uv run --script scripts/gen_html.py media.html
+
+.PHONY: classification-index
+classification-index:
+	uv run --script scripts/export_classifications.py
 
 .PHONY: html
-html: index.html media.html
+html: classification-index index.html media.html
 
 
 .PHONY: serve
 serve:
-	.venv/bin/python3 -m http.server 8082
+	uvx --from uvicorn --with starlette uvicorn scripts.dev_server:app --host 0.0.0.0 --port 8082
 
 
 .PHONY: watch

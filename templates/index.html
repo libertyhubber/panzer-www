@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 
 {% block content %}
+<form id="gallery-filters" role="search" onsubmit="return false">
+  <label class="filter-reactions">
+    <span class="filter-input-prefix" aria-hidden="true">Reaktionen</span>
+    <input id="filter-reactions" aria-label="Mindestens Reaktionen" type="number" min="0" step="1" value="0">
+  </label>
+  <label>
+    <select id="filter-template" aria-label="Vorlage" disabled><option value="">Alle Vorlagen</option></select>
+  </label>
+  <label class="filter-search">
+    <input id="filter-search" aria-label="Suche" type="search" placeholder="Schlagwörter durchsuchen (Volltextsuche wird geladen…)">
+  </label>
+  <p id="filter-status" role="status" aria-live="polite"></p>
+</form>
 <div id="gallery"></div>
 {% endblock %}
 
@@ -11,6 +24,11 @@ import PhotoSwipeLightbox from '/assets/photoswipe-lightbox.esm.js';
 const lightbox = new PhotoSwipeLightbox({
   pswpModule: () => import('/assets/photoswipe.esm.js'),
   loop: false,
+  closeTitle: 'Schließen',
+  zoomTitle: 'Vergrößern / verkleinern',
+  arrowPrevTitle: 'Vorheriges Bild',
+  arrowNextTitle: 'Nächstes Bild',
+  errorMsg: 'Das Bild konnte nicht geladen werden.',
 })
 
 window.lightbox = lightbox;
@@ -18,19 +36,19 @@ window.lightbox = lightbox;
 // const CB = Math.random().toString(36).slice(2); // Cachebust
 window.CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
 
-const LOADING = {}
 const CACHE = {}
 
 async function fetchJson(path) {
   if (!CACHE[path]) {
-    if (LOADING[path]) {
-      return await new Promise((resolve, reject) => {
-          setTimeout(async function() {resolve(await fetchJson(path))}, 50)
-      })
-    }
-    LOADING[path] = 1
-    const promise = await fetch(path + "?cb=" + CB)
-    CACHE[path] = await promise.json()
+    CACHE[path] = fetch(path + "?cb=" + CB).then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} loading ${path}`)
+      }
+      return response.json()
+    }).catch(error => {
+      delete CACHE[path]
+      throw error
+    })
   }
   return CACHE[path]
 }
@@ -39,7 +57,7 @@ window.fetchJson = fetchJson;
 
 const appNode = document.createElement("script")
 appNode.setAttribute("type", "text/javascript")
-appNode.setAttribute("src", "/assets/app.js?cb=22")
+appNode.setAttribute("src", "/assets/app.js?cb=34")
 document.body.appendChild(appNode)
 
 appNode.addEventListener("load", function(){
@@ -63,21 +81,6 @@ window.IMG_HOSTS = {
     "2033": "https://archiv9.derrosarotepanzer.com",
 };
 
-const yyyy1 = new Date().getFullYear();
-const month = new Date().getMonth() + 1;
-const mm1 = month.toString().padStart(2, '0')
-
-const yyyy0 = (month == 1) ? yyyy1 - 1 : yyyy1
-const mm0 = (month == 1) ? "12" : (month - 1).toString().padStart(2, '0')
-
-const archive1 = IMG_HOSTS[yyyy1]
-const archive0 = IMG_HOSTS[yyyy0]
-
-await Promise.all([
-    fetchJson("images/dir_index.json"),
-    fetchJson(`${archive1}/images/${yyyy1}/${mm1}/entry_index.json`),
-    fetchJson(`${archive0}/images/${yyyy0}/${mm0}/entry_index.json`),
-])
 </script>
 
 <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/photoswipe.css">
