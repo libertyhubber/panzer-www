@@ -3,3 +3,5 @@ sync.log
 *.pyc
 scripts/telegram_backfill_state.json
 scripts/telegram_backfill_state.json.tmp
+scripts/telegram_import_state.json
+scripts/telegram_import_state.json.tmp

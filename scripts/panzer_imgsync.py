@@ -4,7 +4,7 @@
 # dependencies = [
 #   "pudb", "ipython",
 #   "pillow>=11.1.0",
-#   "telethon>=1.39.0"
+#   "telethon>=1.44.0"
 # ]
 # ///
 """
@@ -18,19 +18,22 @@ Uses the following environment variables:
     PANZER_IMGSYNC_BOT_NAME
     PANZER_IMGSYNC_BOT_TOKEN
 
-The bot downloads recent images from the channel
-and write them to the "upload" directory.
+Downloads recent channel photos, ingests them into the sibling archive
+checkouts, and generates website-local indexes, thumbnail sheets and image
+classifications. Publishes generated changes only after classification succeeds.
 
-The filenames should use the date (in isoformat) as a prefix
-and the sha256 hash of the file contents as a suffix.
+Filenames contain the post date, message ID and an image fingerprint.
 
 Usage:
 
-    ./scripts/panter_imgsync.py [-h|--help] [--force]
+    ./scripts/panzer_imgsync.py [-h|--help] [--force] [--no-git]
+
+--no-git performs the sync and ingest without staging, committing or pushing.
 """
 
 import io
 import os
+import argparse
 import re
 import sys
 import copy
@@ -146,7 +149,7 @@ def digest_img(data: bytes, ) -> str:
     img = img.convert('P', palette=Image.ADAPTIVE, colors=8)
 
     # Get pixel values
-    pixels = list(img.getdata())
+    pixels = list(img.get_flattened_data() if hasattr(img, 'get_flattened_data') else img.getdata())
 
     # Calculate the mean pixel value
     mean_pixel = sum(pixels) / len(pixels)
@@ -206,9 +209,10 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
         min_id = 0
     else:
         lookback = 50      # so we update the fwd and rct fields
-        min_id = max(map(int, old_messages.keys())) - lookback
+        min_id = max(0, max(old_messages) - lookback)
 
-    limit = 200
+    # Do not silently skip posts when more than 200 arrived since the last sync.
+    limit = None if old_messages else 200
 
     new_messages = copy.deepcopy(old_messages)
 
@@ -218,6 +222,11 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
     # files must have the same digest and have a date,
     #   within 3 days of each other
     digest_paths = {}
+    for message in old_messages.values():
+        if message.get('dig') and message.get('name'):
+            digest_paths.setdefault(message['dig'], []).append(
+                (_parse_date(message['name']), message['name'])
+            )
     for fpath in fpaths:
         if fpath.name == "thumbnails.jpg" or fpath.name.startswith("thumbnails-"):
             continue
@@ -227,21 +236,10 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
         with fpath.open(mode='rb') as fobj:
             data = fobj.read()
             digest = digest_img(data)
-            if digest in digest_paths:
-                for old_date, old_fname in digest_paths[digest]:
-                    if abs((old_date - date).total_seconds()) < 3 * 24 * 3600:
-                        errmsg = " ".join([
-                            f"digest: {digest}",
-                            f"old_path: {digest_paths[digest]}",
-                            f"new_path : {fpath}",
-                        ])
-                        raise Exception(errmsg)
-                digest_paths[digest].append((date, fpath.name))
-            else:
-                digest_paths[digest] = [(date, fpath.name)]
-
-        if len(digest_paths) > limit * 10:
-            break
+            candidate = (date, fpath.name)
+            candidates = digest_paths.setdefault(digest, [])
+            if candidate not in candidates:
+                candidates.append(candidate)
 
     msg_iter = client.iter_messages(CHANNEL_NAME, min_id=min_id, limit=limit)
     async for msg in msg_iter:
@@ -263,8 +261,8 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
 
         stats = telegram_stats(msg)
 
-        if msg.id in old_messages:
-            digest = old_messages[msg.id]['dig']
+        if msg.id in old_messages and old_messages[msg.id].get('name'):
+            digest = old_messages[msg.id].get('dig')
             tgt_fname = old_messages[msg.id]['name']
 
             new_messages[msg.id].update(stats)
@@ -285,12 +283,12 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
         }
 
         # see if we can find an existing image that matches the digest
-        if digest in digest_paths:
-            for old_date, tgt_fname in digest_paths[digest]:
-                if abs((old_date - cur_date).total_seconds()) < 3 * 24 * 3600:
-                    new_messages[msg.id]['name'] = tgt_fname
-                    print("dup detected:", msg.id, digest, fname_prefix, tgt_fname)
-                    continue
+        duplicate = next((name for date, name in digest_paths.get(digest, [])
+                          if abs((date - cur_date).days) < 3), None)
+        if duplicate:
+            new_messages[msg.id]['name'] = duplicate
+            print("dup detected:", msg.id, digest, fname_prefix, duplicate)
+            continue
 
         if msg.id < 13310:
             new_messages[msg.id]['name'] = None
@@ -305,6 +303,7 @@ async def fetch_api_messages(old_messages: dict[int, dict]) -> dict[int, dict]:
             with tmp_fpath.open(mode='wb') as fobj:
                 fobj.write(blob)
             tmp_fpath.rename(tgt_fpath)
+            digest_paths.setdefault(digest, []).append((cur_date, tgt_fname))
 
     return new_messages
 
@@ -326,7 +325,7 @@ IMG_REPOS = {
 }
 
 
-def _update_images(args: list[str]) -> tuple[pl.Path, pl.Path]:
+def _update_images(args: list[str]) -> list[tuple[pl.Path | None, pl.Path]]:
     client = init_telethon_client()
     old_messages = load_last_messages()
 
@@ -339,55 +338,47 @@ def _update_images(args: list[str]) -> tuple[pl.Path, pl.Path]:
     dump_gallery_metadata(new_messages)
 
     cur_dir = pl.Path(".").absolute()
-    new_img_dirs = [
+    new_img_dirs = sorted(
         directory for directory in (cur_dir / "images").glob("20*/*")
-        if any(path.suffix == ".jpg" and not path.name.startswith("thumbnails-")
-               for path in directory.iterdir())
-    ]
-    if new_img_dirs:
-        www_img_dir = new_img_dirs[0]
+        if directory.is_dir() and any(
+            path.suffix == ".jpg" and path.name != "thumbnails.jpg"
+            and not path.name.startswith("thumbnails-")
+            for path in directory.iterdir()
+        )
+    )
+    updates = []
+    for www_img_dir in new_img_dirs:
+        year = www_img_dir.parent.name
+        archiv_repo = cur_dir.parent / IMG_REPOS[year]
+        if not (archiv_repo / "images").is_dir():
+            raise ValueError(f"archive checkout is missing: {archiv_repo}")
+        archiv_img_dir = archiv_repo / "images" / year / www_img_dir.name
+        archiv_img_dir.mkdir(parents=True, exist_ok=True)
 
-        year  = www_img_dir.parent.name
-        month = www_img_dir.name
-
-        archiv_repo  = cur_dir.parent / IMG_REPOS[year]
-
-        archiv_img_dir = archiv_repo / "images" / year / month
-        if not archiv_img_dir.exists():
-            archiv_img_dir.mkdir(parents=True, exist_ok=True)
-
-        for archiv_fpath in archiv_img_dir.iterdir():
-            shutil.copyfile(archiv_fpath, www_img_dir / archiv_fpath.name)
-    elif "--force" in args:
-        www_img_dir = None
-        archiv_repo  = max(cur_dir.parent.glob("panzer-archiv*"))
-        archiv_img_dir = max((archiv_repo / "images").glob("*/*"))
-    else:
-        return (None, None)
-
-    def _ignore_existing(src_dir, entry_names) -> set:
-        ignore = set()
-        for name in entry_names:
-            if name.startswith("thumbnails-"):
-                ignore.add(name)
+        # Only originals belong in the archive. Never overwrite its index with
+        # the website's (possibly stale) sprite index.
+        for path in www_img_dir.glob("*.jpg"):
+            if path.name == "thumbnails.jpg" or path.name.startswith("thumbnails-"):
                 continue
-            www_path = www_img_dir / name
-            archiv_path = archiv_img_dir / name
+            target = archiv_img_dir / path.name
+            if not target.exists() or target.read_bytes() != path.read_bytes():
+                print(f"cp {path} {target}")
+                shutil.copyfile(path, target)
+        updates.append((www_img_dir, archiv_repo))
 
-            is_up_to_date = (
-                archiv_path.exists()
-                and www_path.stat().st_size == archiv_path.stat().st_size
-            )
-            if is_up_to_date:
-                ignore.add(name)
-
-        return ignore
-
-    if www_img_dir:
-        print(f"cp -R {www_img_dir} {archiv_img_dir}")
-        shutil.copytree(www_img_dir, archiv_img_dir, ignore=_ignore_existing, dirs_exist_ok=True)
-
-    return (www_img_dir, archiv_repo)
+    if not updates:
+        # Retry pending classifications/pushes even when there are no new photos.
+        # Future archive checkouts can exist but contain no months yet.
+        archives = sorted(set(IMG_REPOS.values()), reverse=True)
+        for name in archives:
+            repo = cur_dir.parent / name
+            if any((repo / "images").glob("*/*/entry_index.json")):
+                updates.append((None, repo))
+                break
+        else:
+            if '--force' in args:
+                raise ValueError("no populated archive checkout found")
+    return updates
 
 
 def _update_dir_index(www_img_dir):
@@ -408,25 +399,37 @@ def _update_dir_index(www_img_dir):
                 dir_index.update(json.load(fobj))
 
     dir_index_path = cur_dir / "images" / "dir_index.json"
-    with dir_index_path.open(mode="r") as fobj:
-        if dir_index == json.load(fobj):
-            return
+    if dir_index_path.exists():
+        with dir_index_path.open(mode="r") as fobj:
+            if dir_index == json.load(fobj):
+                return
 
     with dir_index_path.open(mode="w") as fobj:
         print("writing dir_index.json")
         json.dump(dir_index, fobj, sort_keys=True, indent=2)
 
 
-def _commit_archive(archiv_repo):
+def _commit_archive(archiv_repo, *, no_git: bool = False):
     with change_dir(archiv_repo):
         import ingest_uploads
-        ingest_uploads.update_indexes(archiv_repo)
-        ingest_uploads.update_thumbnails(archiv_repo, ROOT_DIR)
+        ingest_uploads.ingest_archive(archiv_repo, ROOT_DIR)
 
-        print(f"git add&commit {archiv_repo}")
-        sp.call(["git", "add", "images/"])
-        sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
-        sp.call(["git", "push"])
+        if not no_git:
+            _publish_generated(["images/"])
+
+
+def _publish_generated(paths: list[str]) -> None:
+    result = sp.run(
+        ["git", "status", "--porcelain", "--", *paths],
+        capture_output=True, text=True, check=True,
+    )
+    if result.stdout.strip():
+        sp.run(["git", "add", "--", *paths], check=True)
+        # Do not include unrelated changes that were already staged by the user.
+        sp.run(["git", "commit", "--only", "-m", "update " + dt.date.today().isoformat(),
+                "--", *paths], check=True)
+    # Retry a previous failed push even if this run generated no new changes.
+    sp.run(["git", "push"], check=True)
 
 
 def _commit_www():
@@ -440,29 +443,30 @@ def _commit_www():
     if (cur_dir / "images").exists():
         generated_paths.append("images/")
 
-    result = sp.run(
-        ["git", "status", "--porcelain", "--", *generated_paths],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    if result.stdout.strip():
-        print(f"git add&commit {cur_dir}")
-        sp.call(["git", "add", *generated_paths])
-        sp.call(["git", "commit", "-m", "update " + dt.date.today().isoformat()])
-        sp.call(["git", "push"])
+    generated_paths = [path for path in generated_paths if (cur_dir / path).exists()]
+    _publish_generated(generated_paths)
 
 
 def main(args: list[str]) -> int:
-    if "-h" in args or "--help" in args:
-        print(__doc__)
-        return 0
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--force', action='store_true', help='require a populated archive even without new photos')
+    parser.add_argument('--no-git', action='store_true', help='sync and ingest without running git')
+    options = parser.parse_args(args)
 
-    www_img_dir, archiv_repo = _update_images(args)
-    if archiv_repo:
-        _commit_archive(archiv_repo)
-    _update_dir_index(www_img_dir)
-    _commit_www()
+    updates = _update_images(args)
+    for archiv_repo in dict.fromkeys(repo for _, repo in updates):
+        if options.no_git:
+            _commit_archive(archiv_repo, no_git=True)
+        else:
+            _commit_archive(archiv_repo)
+    # Only remove staging originals after every archive was ingested/published
+    # successfully. A failure must leave them available for the next run.
+    for www_img_dir, _ in updates:
+        _update_dir_index(www_img_dir)
+    if not updates:
+        _update_dir_index(None)
+    if not options.no_git:
+        _commit_www()
     return 0
 
 if __name__ == '__main__':

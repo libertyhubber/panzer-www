@@ -26,8 +26,10 @@ const GALLERY_STATE = {
     'classificationTextIndex': {}, // {"YYYY/MM/filename": {text, description}}
     'classificationTextStatus': 'loading',
     'tagCounts': new Map(), // Normalized tag -> number of classified images across the catalog.
+    'templateCounts': new Map(), // Template -> number of classified images across the catalog.
     'totalEntries': -1,
     'debounceTimeout': null,
+    'searchDebounceTimeout': null,
     'lastRenderState': null,
     'dataSource': null,
     'allItemsPromise': null,
@@ -114,6 +116,22 @@ function escapeHtml(value) {
     })[char])
 }
 
+function templateLabel(name) {
+    const maxLength = 24
+    const chars = [...name]
+    if (chars.length <= maxLength) return name
+    let prefix = chars.slice(0, maxLength - 1).join('')
+    // Prefer whole words, but still shorten a single unusually long word.
+    if (!/\s/.test(chars[maxLength - 1]) && /\s/.test(prefix)) {
+        prefix = prefix.replace(/\s+\S*$/, '')
+    }
+    return prefix.trimEnd() + '…'
+}
+
+function templateOptionHTML(name, count) {
+    return `<option title="${escapeHtml(name)}" value="${escapeHtml(name)}">${escapeHtml(templateLabel(name))} (${count})</option>`
+}
+
 function tagKey(tag) {
     return tag.trim().toLowerCase()
 }
@@ -129,7 +147,7 @@ function countCatalogTags(index) {
     return counts
 }
 
-function classificationHTML(classification) {
+function classificationHTML(classification, imageId) {
     if (!classification) {
         const message = GALLERY_STATE.classificationStatus === 'loading'
             ? 'Klassifizierung wird geladen…'
@@ -137,17 +155,19 @@ function classificationHTML(classification) {
                 ? 'Klassifizierung nicht verfügbar' : 'Nicht klassifiziert'
         return `<div class="thumbnail-classification classification-unavailable">${message}</div>`
     }
-    const template = classification.template
-        ? `<button type="button" class="classification-tag meme-template">${escapeHtml(classification.template)}</button>`
+    const template = (GALLERY_STATE.templateCounts.get(classification.template) || 0) > 1
+        ? `<button type="button" data-template="${escapeHtml(classification.template)}" title="${escapeHtml(classification.template)}" aria-label="${escapeHtml(classification.template)}" class="classification-tag meme-template">${escapeHtml(templateLabel(classification.template))}</button>`
         : ''
     const frequency = tag => GALLERY_STATE.tagCounts.get(tagKey(tag)) || 0
-    const tags = classification.tags
-        .filter(tag => frequency(tag) > 1)
+    const sortedTags = [...classification.tags]
         .sort((a, b) => frequency(b) - frequency(a) || a.localeCompare(b, 'de'))
+    const tags = sortedTags
         .map(tag => `<button type="button" class="classification-tag">${escapeHtml(tag)}</button>`)
         .join('')
     return `<div class="thumbnail-classification">` +
-        (template || tags ? `<div class="classification-tags" role="group" aria-label="Vorlage und Schlagwörter zum Bild">${template}${tags}</div>` : '') +
+        (template || classification.tags.length ?
+            `<div class="classification-tags" role="group" aria-label="Vorlage und Schlagwörter zum Bild">${template}${tags}` +
+            `<button type="button" class="classification-more" data-image-id="${escapeHtml(imageId)}" aria-label="Alle Schlagwörter anzeigen" title="Alle Schlagwörter anzeigen" aria-haspopup="dialog" aria-expanded="false" hidden><span aria-hidden="true">...</span></button></div>` : '') +
         '</div>'
 }
 
@@ -303,11 +323,12 @@ async function loadClassifications() {
     for (const item of Object.values(GALLERY_STATE.classificationIndex)) {
         if (item.template) templateCounts.set(item.template, (templateCounts.get(item.template) || 0) + 1)
     }
+    GALLERY_STATE.templateCounts = templateCounts
     const templates = [...templateCounts.entries()]
         .filter(([, count]) => count >= 5)
         .sort(([a], [b]) => a.localeCompare(b))
     select.innerHTML = '<option value="">Alle Vorlagen</option>' + templates.map(([name, count]) =>
-        `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${count})</option>`).join('')
+        templateOptionHTML(name, count)).join('')
     select.disabled = GALLERY_STATE.classificationStatus !== 'ready'
     GALLERY_STATE.filteredItems = null
     await updateGallery()
@@ -375,6 +396,10 @@ async function loadAllItems() {
     await GALLERY_STATE.allItemsPromise
 }
 
+function normalizeSearch(value) {
+    return value.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
 function matchesFilters(item) {
     const filters = GALLERY_STATE.filters
     if (filters.minReactions > 0 && (item.reactions ?? 0) < filters.minReactions) return false
@@ -382,18 +407,26 @@ function matchesFilters(item) {
     if (filters.template && classification?.template !== filters.template) return false
     if (filters.search) {
         const details = GALLERY_STATE.classificationTextIndex[item.imageId]
-        const text = [details?.text, details?.description,
-            classification?.template, ...(classification?.tags || [])].filter(Boolean).join(' ').toLowerCase()
+        const text = normalizeSearch([details?.text, details?.description,
+            classification?.template, ...(classification?.tags || [])].filter(Boolean).join(' '))
         if (!text.includes(filters.search)) return false
     }
     return true
 }
 
+function searchInputHandler() {
+    clearTimeout(GALLERY_STATE.searchDebounceTimeout)
+    GALLERY_STATE.searchDebounceTimeout = setTimeout(filterChangeHandler, 200)
+}
+
 function filterChangeHandler() {
+    closeTagOverlay()
+    // Other controls and tag clicks apply the current search immediately too.
+    clearTimeout(GALLERY_STATE.searchDebounceTimeout)
     GALLERY_STATE.filters = {
         minReactions: Math.max(0, Number(document.getElementById('filter-reactions').value) || 0),
         template: document.getElementById('filter-template').value,
-        search: document.getElementById('filter-search').value.trim().toLowerCase(),
+        search: normalizeSearch(document.getElementById('filter-search').value),
     }
     if (GALLERY_STATE.allItemsError) GALLERY_STATE.allItemsPromise = null
     GALLERY_STATE.filterVersion += 1
@@ -533,7 +566,7 @@ async function updateGallery() {
             (item.comments === null ? '' : `<span title="Telegram-Kommentare" aria-label="${item.comments} Kommentare">💬 ${formatCount(item.comments)}</span>`) +
             `</div>${telegramLink}` +
             (LOCAL_DEBUG ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${item.galleryIndex}" aria-haspopup="dialog">debug</button>` : '') +
-            classificationHTML(classification) +
+            classificationHTML(classification, item.imageId) +
             `</div></article>`
         )
 
@@ -544,6 +577,7 @@ async function updateGallery() {
         }
     }
 
+    closeTagOverlay()
     galleryNode.innerHTML = thumbnailsHTML.join("")
     fitClassificationTags(galleryNode)
     enhanceThumbnails(ds.dataSourceItems, filtered)
@@ -551,19 +585,86 @@ async function updateGallery() {
     return firstItem && (usesOriginal(firstItem, filtered) ? firstItem.src : firstItem.thumbSrc)
 }
 
-// Measure wrapped buttons, hiding whole tags rather than clipping a row.
+// Greedily try every tag. Rejected tags leave the flex flow so later, shorter
+// tags can use the remaining space instead of being pushed into invisible rows.
 function fitClassificationTags(galleryNode) {
     for (const group of galleryNode.querySelectorAll('.classification-tags')) {
+        const children = Array.from(group.children)
+        const more = children.find(child => child.classList?.contains('classification-more'))
+        const tags = children.filter(child => child !== more)
         const bounds = group.getBoundingClientRect()
-        for (const tag of group.children) {
-            const rect = tag.getBoundingClientRect()
-            const fits = rect.bottom <= bounds.bottom + 0.5 &&
-                rect.right <= bounds.right + 0.5 && rect.left >= bounds.left - 0.5
-            tag.style.visibility = fits ? 'visible' : 'hidden'
-            tag.disabled = !fits
-            tag.tabIndex = fits ? 0 : -1
+        const pack = buttonBounds => {
+            for (const tag of tags) tag.style.display = 'none'
+            for (const tag of tags) {
+                tag.style.display = ''
+                const rect = tag.getBoundingClientRect()
+                const overlapsButton = buttonBounds &&
+                    rect.right > buttonBounds.left && rect.left < buttonBounds.right &&
+                    rect.bottom > buttonBounds.top && rect.top < buttonBounds.bottom
+                const fits = rect.bottom <= bounds.bottom + 0.5 &&
+                    rect.right <= bounds.right + 0.5 && rect.left >= bounds.left - 0.5 && !overlapsButton
+                tag.style.display = fits ? '' : 'none'
+                tag.style.visibility = fits ? 'visible' : 'hidden'
+                tag.disabled = !fits
+                tag.tabIndex = fits ? 0 : -1
+            }
+        }
+        if (more) more.hidden = true
+        pack(null)
+        if (!more) continue
+        more.hidden = !tags.some(tag => tag.disabled)
+        if (!more.hidden) {
+            // Repack with the small bottom-right button reserved; rejected tags
+            // still free their space for any subsequent tags that fit beside it.
+            pack(more.getBoundingClientRect())
         }
     }
+}
+
+let tagOverlay = null
+let tagOverlayTrigger = null
+
+function closeTagOverlay(restoreFocus = false) {
+    if (!tagOverlay) return
+    tagOverlay.remove()
+    tagOverlay = null
+    tagOverlayTrigger.setAttribute('aria-expanded', 'false')
+    if (restoreFocus && tagOverlayTrigger.isConnected) tagOverlayTrigger.focus()
+    tagOverlayTrigger = null
+}
+
+function showTagOverlay(trigger, event) {
+    if (tagOverlayTrigger === trigger) {
+        closeTagOverlay(true)
+        return
+    }
+    closeTagOverlay()
+    const classification = GALLERY_STATE.classificationIndex[trigger.getAttribute('data-image-id')]
+    if (!classification) return
+    const overlay = document.createElement('div')
+    overlay.id = 'all-tags-overlay'
+    overlay.setAttribute('role', 'dialog')
+    overlay.setAttribute('aria-labelledby', 'all-tags-title')
+    const template = classification.template
+        ? `<button type="button" class="classification-tag meme-template" data-template="${escapeHtml(classification.template)}">${escapeHtml(classification.template)}</button>` : ''
+    overlay.innerHTML = '<button type="button" class="tags-overlay-close" aria-label="Schließen">×</button>' +
+        '<h2 id="all-tags-title">Alle Schlagwörter</h2>' +
+        '<div class="tags-overlay-list">' + template + classification.tags.map(tag =>
+            `<button type="button" class="classification-tag">${escapeHtml(tag)}</button>`).join('') + '</div>'
+    document.body.appendChild(overlay)
+    tagOverlay = overlay
+    tagOverlayTrigger = trigger
+    trigger.setAttribute('aria-expanded', 'true')
+    // Fixed viewport coordinates keep the gallery geometry completely unchanged.
+    const anchor = trigger.getBoundingClientRect()
+    const x = event.detail !== 0 && Number.isFinite(event.clientX) ? event.clientX : anchor.right
+    const y = event.detail !== 0 && Number.isFinite(event.clientY) ? event.clientY : anchor.bottom
+    const bounds = overlay.getBoundingClientRect()
+    const width = document.documentElement.clientWidth || window.innerWidth
+    const height = document.documentElement.clientHeight || window.innerHeight
+    overlay.style.left = Math.max(8, Math.min(x + 12, width - bounds.width - 8)) + 'px'
+    overlay.style.top = Math.max(8, Math.min(y + 12, height - bounds.height - 8)) + 'px'
+    overlay.querySelector('.classification-tag, .tags-overlay-close').focus({ preventScroll: true })
 }
 
 
@@ -582,6 +683,7 @@ async function updateGalleryHandler(evt) {
             await updateDataSources(lookAheadIndex)
         }
     } else {
+        closeTagOverlay()
         clearTimeout(GALLERY_STATE.debounceTimeout)
         GALLERY_STATE.debounceTimeout = setTimeout(updateGallery, 150)
     }
@@ -621,6 +723,19 @@ function showDebugMetadata(item) {
 }
 
 function galleryClickHandler(evt) {
+    const more = evt.target.closest?.('.classification-more') ||
+        (evt.target.classList.contains('classification-more') ? evt.target : null)
+    if (more) {
+        evt.preventDefault()
+        showTagOverlay(more, evt)
+        return false
+    }
+    if (evt.target.classList.contains('tags-overlay-close')) {
+        evt.preventDefault()
+        closeTagOverlay(true)
+        return false
+    }
+    if (tagOverlay && !tagOverlay.contains(evt.target)) closeTagOverlay()
     if (LOCAL_DEBUG && evt.target.classList.contains('thumbnail-debug')) {
         evt.preventDefault()
         const index = Number(evt.target.getAttribute('data-gallery-idx'))
@@ -632,11 +747,10 @@ function galleryClickHandler(evt) {
         evt.preventDefault()
         const isTemplate = evt.target.classList.contains('meme-template')
         const control = document.getElementById(isTemplate ? 'filter-template' : 'filter-search')
-        const value = evt.target.textContent.trim()
+        const value = isTemplate ? evt.target.getAttribute('data-template') : evt.target.textContent.trim()
         if (isTemplate && !Array.from(control.options).some(option => option.value === value)) {
-            const count = Object.values(GALLERY_STATE.classificationIndex)
-                .filter(classification => classification.template === value).length
-            control.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(value)}">${escapeHtml(value)} (${count})</option>`)
+            const count = GALLERY_STATE.templateCounts.get(value) || 0
+            control.insertAdjacentHTML('beforeend', templateOptionHTML(value, count))
         }
         control.value = value
         control.focus()
@@ -681,13 +795,20 @@ function navClickHandler(evt) {
 }
 
 function initHandlers() {
-    for (const id of ['filter-reactions', 'filter-template', 'filter-search']) {
+    for (const id of ['filter-reactions', 'filter-template']) {
         document.getElementById(id).addEventListener('input', filterChangeHandler)
     }
+    document.getElementById('filter-search').addEventListener('input', searchInputHandler)
     window.addEventListener('scroll', updateGalleryHandler)
     window.addEventListener('resize', updateGalleryHandler)
     window.addEventListener('click', galleryClickHandler)
     window.addEventListener('click', navClickHandler)
+    window.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && tagOverlay) {
+            event.preventDefault()
+            closeTagOverlay(true)
+        }
+    })
 }
 
 async function initGallery() {

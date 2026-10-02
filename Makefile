@@ -5,7 +5,7 @@ SHELL := /bin/bash
 
 .PHONY: sync_and_ingest
 sync_and_ingest:
-	uv run --script scripts/panzer_imgsync.py
+	uv run --script scripts/panzer_imgsync.py $(SYNC_ARGS)
 
 
 .PHONY: thumbnails

@@ -1,0 +1,82 @@
+{
+  "channel": "RosaroterPanzerBackup",
+  "matches": [
+    {
+      "message_id": 13380,
+      "name": "2024-08-04T153659_986f307582687d88z8emk.jpg",
+      "date": "2024-08-04T15:37:15+00:00",
+      "archive_sha256": "986f307582687d8290aebbb4d42594a296a6e924ecb04a409c2d45042a23c1df",
+      "telegram_sha256": "fbf1f60382fadec946f04cdc78492a0a848a58da8152ea643a2ca7ed203e23fe"
+    },
+    {
+      "message_id": 13120,
+      "name": "2024-07-14T155314_bb6da70c4872ed08wyzp3.jpg",
+      "date": "2024-07-14T16:13:40+00:00",
+      "archive_sha256": "bb6da70c4872ed09b9bd57ae6cfb3c7f3a29f478607dfb792aba15d840f014f2",
+      "telegram_sha256": "cfb4f926339825366a37a47ff29df5c5ce7595ea6ebe5bcf5a58d17a0cff94f2"
+    },
+    {
+      "message_id": 13023,
+      "name": "2024-07-07T174815_9028395ccad91a88w6xgv.jpg",
+      "date": "2024-07-07T17:47:48+00:00",
+      "archive_sha256": "9028395ccad91a88b827f20b8632480ccbdc1532ebb7b10881ff02139b1aa5f6",
+      "telegram_sha256": "56aa23b0a687babff8cfa063732a8e6d71d055f1b5058f9474ab26a457779082"
+    },
+    {
+      "message_id": 9167,
+      "name": "2023-08-21_2A5073E1.jpg",
+      "date": "2023-08-19T15:58:39+00:00",
+      "archive_sha256": "71367d9c0d3ca539cb480d3b2abf3fac12b5f192132db6e8e74173fd48143cc0",
+      "telegram_sha256": "ad7faed0a3b8ceca22b07781415dec510db2727f16860decce2097ddf67d521a"
+    },
+    {
+      "message_id": 8759,
+      "name": "2023-07-17_773DB87D.jpg",
+      "date": "2023-07-16T08:56:15+00:00",
+      "archive_sha256": "8bcf430e368ae249fa923a945a93eb1c21a1b144b078ba249f59353df6b17ec6",
+      "telegram_sha256": "8d7e95a109f4bee1b119714b4f953a10ab97ccaac4b989d6776fee7ed5bba592"
+    },
+    {
+      "message_id": 8093,
+      "name": "2023-05-21_51F3AF86.jpg",
+      "date": "2023-05-19T14:51:09+00:00",
+      "archive_sha256": "cca4fd621ebba91318e145bead1ef7770d26b3cab59b464a9c4ae50cdea1d835",
+      "telegram_sha256": "a50a76f35e7f89ec4cb9e38cdb366f231771572582e45d371c456971064afcc4"
+    },
+    {
+      "message_id": 6924,
+      "name": "2023-02-04_F79A8520.jpg",
+      "date": "2023-02-06T19:11:11+00:00",
+      "archive_sha256": "c377e42f4eba41f15b29d2dd6b1f33c682049d658e6b699d542670badaeeb7fd",
+      "telegram_sha256": "abdc3eaf03f65583578c81f3bd4ed90b3cfa54981a77a4d683dfa1e5cf36f1fd"
+    },
+    {
+      "message_id": 4789,
+      "name": "2022-08-06_46121A21.jpg",
+      "date": "2022-08-05T16:32:56+00:00",
+      "archive_sha256": "49e2211ed3d54f4dbf82646913766f42a471dabd6fd4210aef81d179ca19419d",
+      "telegram_sha256": "a8f15da903cf82d2c28ad96d6ea124ae36fcb4b2d766a7bd817623d1137d4302"
+    },
+    {
+      "message_id": 4332,
+      "name": "2022-07-03_8FA5596F.jpg",
+      "date": "2022-07-06T16:10:17+00:00",
+      "archive_sha256": "1fcc938082fd017a363910b9877d284121863196709f6d535ac3ad6aedc623f3",
+      "telegram_sha256": "0a564f5211ca07cd024b5449a968f572cefc09c8d2567166ccbe23f91537df4d"
+    },
+    {
+      "message_id": 3941,
+      "name": "2022-06-01_FD0375A4.jpg",
+      "date": "2022-06-11T16:03:06+00:00",
+      "archive_sha256": "d183b3e6b367df9f4fa4c7861258cf0c2fd495927fbbc782ee41518c7c79ced4",
+      "telegram_sha256": "3661364e5d294f4c078ff9c3950f8a96b4bf80f4d3273b735c2698f243c9402f"
+    },
+    {
+      "message_id": 3782,
+      "name": "2022-05-17_D731DABC.jpg",
+      "date": "2022-06-01T19:31:30+00:00",
+      "archive_sha256": "1604a1d120fe479104cebba7deed46d42d4bc9f654d876070dc3fa235646788d",
+      "telegram_sha256": "0bfd2d9691eea17a66a1ae9525dc2675581d43c466ac580ffacddfa97e1aaffb"
+    }
+  ]
+}
