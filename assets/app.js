@@ -9,7 +9,7 @@ const THUMBNAIL_PADDING = 2
 const THUMBNAIL_MARGIN = 16
 const THUMBNAIL_WIDTH = THUMBNAIL_SIZE + THUMBNAIL_MARGIN
 const THUMBNAIL_ROW_HEIGHT = 364
-const LOCAL_DEBUG = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
+const DEBUG_ENABLED = new URL(location.href).searchParams.get('debug') === '1'
 const ORIGINAL_LOAD_LIMIT = 4
 const GALLERY_IMAGES = new Map()
 let upgradeCandidates = []
@@ -38,6 +38,179 @@ const GALLERY_STATE = {
     'filteredItems': null,
     'filters': { minReactions: 0, template: '', search: '' },
     'filterVersion': 0,
+    'navigationNotice': '',
+}
+
+// Only durable browsing state belongs in the URL, not transient overlays or indexes.
+// Image filenames remain stable when newer images are added to the archive.
+let navigationVersion = 0
+let restoringNavigation = false
+let selectedImageId = ''
+let appliedSearch = ''
+let resolveMetadataReady, resolveGalleryReady
+const metadataReady = new Promise(resolve => { resolveMetadataReady = resolve })
+const galleryReady = new Promise(resolve => { resolveGalleryReady = resolve })
+
+function nonnegativeNumber(value) {
+    const number = Number(value)
+    return Number.isFinite(number) ? Math.max(0, number) : 0
+}
+
+function readNavigation() {
+    const params = new URL(location.href).searchParams
+    return {
+        minReactions: nonnegativeNumber(params.get('reactions')),
+        template: params.get('template') || '',
+        search: params.get('q') || '',
+        image: params.get('image') || '',
+        // Scroll is local to this tab's history, never part of a shared URL.
+        scroll: nonnegativeNumber(history.state?.galleryScroll),
+    }
+}
+
+function writeNavigation(push = false) {
+    if (restoringNavigation) return
+    const url = new URL(location.href)
+    const values = {
+        reactions: GALLERY_STATE.filters.minReactions || '',
+        template: GALLERY_STATE.filters.template,
+        q: appliedSearch,
+        image: selectedImageId,
+    }
+    for (const [key, value] of Object.entries(values)) {
+        if (value === '') url.searchParams.delete(key)
+        else url.searchParams.set(key, value)
+    }
+    // Preserve unrelated query parameters/fragments and other history state.
+    const scroll = Math.round(document.documentElement.scrollTop)
+    const state = { ...history.state, galleryScroll: scroll }
+    if (url.href !== location.href) {
+        history[push ? 'pushState' : 'replaceState'](state, '', url.href)
+    } else if (history.state?.galleryScroll !== scroll) {
+        history.replaceState(state, '', url.href)
+    }
+}
+
+function setTemplateControl(value) {
+    const control = document.getElementById('filter-template')
+    if (value && !Array.from(control.options).some(option => option.value === value)) {
+        control.insertAdjacentHTML('beforeend', templateOptionHTML(value,
+            GALLERY_STATE.templateCounts.get(value) || 0))
+    }
+    control.value = value
+}
+
+function cancelLightbox() {
+    // Cancel a pending module import too, before it can open an obsolete image.
+    window.lightbox.shouldOpen = false
+    const pswp = window.lightbox.pswp
+    if (!pswp) return
+    return new Promise(resolve => {
+        pswp.on('destroy', resolve)
+        if (pswp.opener.isOpen || pswp.isDestroying) pswp.destroy()
+        else pswp.on('openingAnimationEnd', () => pswp.destroy())
+    })
+}
+
+async function restoreNavigation(navigation) {
+    const version = ++navigationVersion
+    restoringNavigation = true
+    clearTimeout(GALLERY_STATE.searchDebounceTimeout)
+    clearTimeout(GALLERY_STATE.debounceTimeout)
+    closeTagOverlay()
+    const lightboxClosed = cancelLightbox()
+    selectedImageId = navigation.image
+    GALLERY_STATE.navigationNotice = ''
+    appliedSearch = navigation.search
+    document.getElementById('filter-reactions').value = navigation.minReactions
+    document.getElementById('filter-search').value = navigation.search
+    GALLERY_STATE.filters = {
+        minReactions: navigation.minReactions,
+        template: navigation.template,
+        search: normalizeSearch(navigation.search),
+    }
+    setTemplateControl(navigation.template)
+    GALLERY_STATE.filterVersion += 1
+    GALLERY_STATE.filteredItems = null
+    GALLERY_STATE.lastRenderState = null
+    try {
+        // Plain image links need only their month; filtered links require the final
+        // metadata/indexes so partial results cannot open the wrong slide.
+        await Promise.all([filtersActive() ? metadataReady : galleryReady, lightboxClosed])
+        if (version !== navigationVersion) return
+        if (filtersActive()) await loadAllItems()
+        else if (navigation.image) {
+            const dirName = navigation.image.split('/').slice(0, 2).join('/')
+            let start = 0
+            for (const dir of [...GALLERY_STATE.dirNames].reverse()) {
+                if (dir === dirName) {
+                    try {
+                        await loadMonthItems(dir, start)
+                    } catch (error) {
+                        console.warn('Could not load linked image month', error)
+                    }
+                    break
+                }
+                start += GALLERY_STATE.dirIndex[dir]
+            }
+        }
+        if (version !== navigationVersion) return
+        // Refresh the gallery height before restoring a scroll position: the old
+        // filter may have had too few rows for the browser to scroll this far.
+        await updateGallery()
+        if (version !== navigationVersion) return
+        window.scrollTo(0, navigation.scroll)
+        await updateGallery()
+        if (version !== navigationVersion) return
+        if (navigation.image) {
+            const items = filtersActive() ? GALLERY_STATE.filteredItems : GALLERY_STATE.dataSource
+            const index = items.findIndex(item => item?.imageId === navigation.image)
+            if (index >= 0) {
+                window.lightbox.options.dataSource = items
+                window.lightbox.loadAndOpen(index)
+            } else {
+                GALLERY_STATE.navigationNotice = ' (Verlinktes Bild nicht verfügbar oder durch Filter ausgeschlossen.)'
+                document.getElementById('filter-status').textContent += GALLERY_STATE.navigationNotice
+            }
+        }
+    } catch (error) {
+        console.warn('Could not restore gallery navigation', error)
+    } finally {
+        if (version === navigationVersion) restoringNavigation = false
+    }
+}
+
+async function lightboxChangeHandler() {
+    const pswp = window.lightbox.pswp
+    if (!pswp || pswp.isDestroying) return
+    const version = navigationVersion
+    const index = pswp.currIndex
+    const currentItem = pswp.options.dataSource[index]
+    if (currentItem) {
+        selectedImageId = currentItem.imageId
+        writeNavigation()
+    }
+    if (!filtersActive()) {
+        try {
+            await preloadLightboxItems(index)
+        } catch (error) {
+            console.warn('Could not preload neighboring images', error)
+        }
+    }
+    if (version !== navigationVersion || pswp !== window.lightbox.pswp || pswp.isDestroying || index !== pswp.currIndex) return
+    const item = pswp.options.dataSource[index]
+    if (item) {
+        selectedImageId = item.imageId
+        writeNavigation()
+    }
+}
+
+function lightboxCloseHandler() {
+    if (restoringNavigation) return
+    navigationVersion += 1
+    selectedImageId = ''
+    // Closing is a navigation action: Back can reopen the image, Forward closes it.
+    writeNavigation(true)
 }
 
 async function loadMonthItems(dirName, dirStartIndex) {
@@ -55,7 +228,7 @@ async function loadMonthItems(dirName, dirStartIndex) {
         const stride = THUMBNAIL_SIZE + THUMBNAIL_PADDING
         const thumbSrc = `images/${dirName}/thumbnails-${String(sheetIndex).padStart(2, '0')}.webp?cb=${CB}`
         dataSourceItems.push({
-            ...(LOCAL_DEBUG ? { entryMetadata: entry } : {}),
+            ...(DEBUG_ENABLED ? { entryMetadata: entry } : {}),
             imageId: `${dirName}/${entry.name}`,
             src: `${host}/images/${dirName}/${entry.name}`,
             width: entry.w,
@@ -167,7 +340,7 @@ function classificationHTML(classification, imageId) {
     return `<div class="thumbnail-classification">` +
         (template || classification.tags.length ?
             `<div class="classification-tags" role="group" aria-label="Vorlage und Schlagwörter zum Bild">${template}${tags}` +
-            `<button type="button" class="classification-more" data-image-id="${escapeHtml(imageId)}" aria-label="Alle Schlagwörter anzeigen" title="Alle Schlagwörter anzeigen" aria-haspopup="dialog" aria-expanded="false" hidden><span aria-hidden="true">...</span></button></div>` : '') +
+            `<button type="button" class="classification-more" data-image-id="${escapeHtml(imageId)}" aria-label="Weitere Schlagwörter anzeigen" title="Weitere Schlagwörter anzeigen" aria-haspopup="dialog" aria-expanded="false" hidden>+0</button></div>` : '') +
         '</div>'
 }
 
@@ -329,6 +502,7 @@ async function loadClassifications() {
         .sort(([a], [b]) => a.localeCompare(b))
     select.innerHTML = '<option value="">Alle Vorlagen</option>' + templates.map(([name, count]) =>
         templateOptionHTML(name, count)).join('')
+    setTemplateControl(GALLERY_STATE.filters.template)
     select.disabled = GALLERY_STATE.classificationStatus !== 'ready'
     GALLERY_STATE.filteredItems = null
     await updateGallery()
@@ -423,11 +597,18 @@ function filterChangeHandler() {
     closeTagOverlay()
     // Other controls and tag clicks apply the current search immediately too.
     clearTimeout(GALLERY_STATE.searchDebounceTimeout)
+    navigationVersion += 1
+    restoringNavigation = false
+    selectedImageId = ''
+    GALLERY_STATE.navigationNotice = ''
+    appliedSearch = document.getElementById('filter-search').value.trim()
     GALLERY_STATE.filters = {
-        minReactions: Math.max(0, Number(document.getElementById('filter-reactions').value) || 0),
+        minReactions: nonnegativeNumber(document.getElementById('filter-reactions').value),
         template: document.getElementById('filter-template').value,
         search: normalizeSearch(document.getElementById('filter-search').value),
     }
+    window.scrollTo(0, 0)
+    writeNavigation(true)
     if (GALLERY_STATE.allItemsError) GALLERY_STATE.allItemsPromise = null
     GALLERY_STATE.filterVersion += 1
     upgradeCandidates = []
@@ -466,6 +647,7 @@ async function updateGallery() {
             ? GALLERY_STATE.classificationTextStatus === 'loading' ? ' (Volltextsuche wird geladen…)' : ' (Volltextsuche nicht verfügbar)' : '') + (GALLERY_STATE.filters.minReactions > 0 && GALLERY_STATE.telegramStatus !== 'ready'
             ? GALLERY_STATE.telegramStatus === 'loading' ? ' (Reaktionen werden geladen…)' : ' (Reaktionen nicht verfügbar)' : '')
         : ''
+    status.textContent += GALLERY_STATE.navigationNotice
 
     const scrollTop = document.documentElement.scrollTop
     const galleryTop = galleryNode.getBoundingClientRect ? galleryNode.getBoundingClientRect().top + scrollTop : 0
@@ -565,7 +747,7 @@ async function updateGallery() {
             (item.views === null ? '' : `<span title="Telegram-Aufrufe" aria-label="${item.views} Aufrufe">◉ ${formatCount(item.views)}</span>`) +
             (item.comments === null ? '' : `<span title="Telegram-Kommentare" aria-label="${item.comments} Kommentare">💬 ${formatCount(item.comments)}</span>`) +
             `</div>${telegramLink}` +
-            (LOCAL_DEBUG ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${item.galleryIndex}" aria-haspopup="dialog">debug</button>` : '') +
+            (DEBUG_ENABLED ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${item.galleryIndex}" aria-haspopup="dialog">debug</button>` : '') +
             classificationHTML(classification, item.imageId) +
             `</div></article>`
         )
@@ -593,30 +775,39 @@ function fitClassificationTags(galleryNode) {
         const more = children.find(child => child.classList?.contains('classification-more'))
         const tags = children.filter(child => child !== more)
         const bounds = group.getBoundingClientRect()
-        const pack = buttonBounds => {
+        const fitsBounds = rect => rect.bottom <= bounds.bottom + 0.5 &&
+            rect.right <= bounds.right + 0.5 && rect.left >= bounds.left - 0.5
+        const setCount = count => {
+            more.textContent = `+${count}`
+            more.setAttribute('aria-label', `${count} weitere Schlagwörter anzeigen`)
+            more.setAttribute('title', `${count} weitere Schlagwörter anzeigen`)
+        }
+        const pack = reserveCounter => {
+            let visible = 0
             for (const tag of tags) tag.style.display = 'none'
+            if (reserveCounter) setCount(tags.length)
             for (const tag of tags) {
                 tag.style.display = ''
-                const rect = tag.getBoundingClientRect()
-                const overlapsButton = buttonBounds &&
-                    rect.right > buttonBounds.left && rect.left < buttonBounds.right &&
-                    rect.bottom > buttonBounds.top && rect.top < buttonBounds.bottom
-                const fits = rect.bottom <= bounds.bottom + 0.5 &&
-                    rect.right <= bounds.right + 0.5 && rect.left >= bounds.left - 0.5 && !overlapsButton
+                if (reserveCounter) setCount(tags.length - visible - 1)
+                const fits = fitsBounds(tag.getBoundingClientRect()) &&
+                    (!reserveCounter || fitsBounds(more.getBoundingClientRect()))
                 tag.style.display = fits ? '' : 'none'
                 tag.style.visibility = fits ? 'visible' : 'hidden'
                 tag.disabled = !fits
                 tag.tabIndex = fits ? 0 : -1
+                if (fits) visible += 1
+                if (reserveCounter) setCount(tags.length - visible)
             }
+            return tags.length - visible
         }
         if (more) more.hidden = true
-        pack(null)
+        const hiddenCount = pack(false)
         if (!more) continue
-        more.hidden = !tags.some(tag => tag.disabled)
-        if (!more.hidden) {
-            // Repack with the small bottom-right button reserved; rejected tags
-            // still free their space for any subsequent tags that fit beside it.
-            pack(more.getBoundingClientRect())
+        more.hidden = hiddenCount === 0
+        if (hiddenCount) {
+            // The counter is the last flex item. Reserve its actual width while
+            // trying tags, so it stays inline and counts every omitted item.
+            pack(true)
         }
     }
 }
@@ -644,11 +835,10 @@ function showTagOverlay(trigger, event) {
     const overlay = document.createElement('div')
     overlay.id = 'all-tags-overlay'
     overlay.setAttribute('role', 'dialog')
-    overlay.setAttribute('aria-labelledby', 'all-tags-title')
+    overlay.setAttribute('aria-label', 'Schlagwörter zum Bild')
     const template = classification.template
         ? `<button type="button" class="classification-tag meme-template" data-template="${escapeHtml(classification.template)}">${escapeHtml(classification.template)}</button>` : ''
     overlay.innerHTML = '<button type="button" class="tags-overlay-close" aria-label="Schließen">×</button>' +
-        '<h2 id="all-tags-title">Alle Schlagwörter</h2>' +
         '<div class="tags-overlay-list">' + template + classification.tags.map(tag =>
             `<button type="button" class="classification-tag">${escapeHtml(tag)}</button>`).join('') + '</div>'
     document.body.appendChild(overlay)
@@ -658,35 +848,31 @@ function showTagOverlay(trigger, event) {
     // Fixed viewport coordinates keep the gallery geometry completely unchanged.
     const anchor = trigger.getBoundingClientRect()
     const x = event.detail !== 0 && Number.isFinite(event.clientX) ? event.clientX : anchor.right
-    const y = event.detail !== 0 && Number.isFinite(event.clientY) ? event.clientY : anchor.bottom
+    const groupTop = trigger.closest('.classification-tags').getBoundingClientRect().top
     const bounds = overlay.getBoundingClientRect()
     const width = document.documentElement.clientWidth || window.innerWidth
     const height = document.documentElement.clientHeight || window.innerHeight
     overlay.style.left = Math.max(8, Math.min(x + 12, width - bounds.width - 8)) + 'px'
-    overlay.style.top = Math.max(8, Math.min(y + 12, height - bounds.height - 8)) + 'px'
+    const top = Math.max(8, Math.min(groupTop, height - 8))
+    overlay.style.top = top + 'px'
+    overlay.style.maxHeight = Math.min(360, height - top - 8) + 'px'
     overlay.querySelector('.classification-tag, .tags-overlay-close').focus({ preventScroll: true })
 }
 
 
-async function updateGalleryHandler(evt) {
-    if (!GALLERY_STATE.dirNames) {return}  // not yet initialized
-
-    if (evt.constructor.name == 'PhotoSwipeEvent') {
-        if (filtersActive()) return
-        const lookBackIndex = Math.max(lightbox.pswp.currIndex - 30, 0)
-        if (!GALLERY_STATE.dataSource[lookBackIndex]) {
-            await updateDataSources(lookBackIndex)
-        }
-        const lookAheadIndex = Math.min(lightbox.pswp.currIndex + 30, GALLERY_STATE.dataSource.length - 1)
-
-        if (!GALLERY_STATE.dataSource[lookAheadIndex]) {
-            await updateDataSources(lookAheadIndex)
-        }
-    } else {
-        closeTagOverlay()
-        clearTimeout(GALLERY_STATE.debounceTimeout)
-        GALLERY_STATE.debounceTimeout = setTimeout(updateGallery, 150)
+async function preloadLightboxItems(index) {
+    for (const nearbyIndex of [Math.max(index - 30, 0),
+        Math.min(index + 30, GALLERY_STATE.dataSource.length - 1)]) {
+        if (!GALLERY_STATE.dataSource[nearbyIndex]) await updateDataSources(nearbyIndex)
     }
+}
+
+function updateGalleryHandler(evt) {
+    if (!GALLERY_STATE.dirNames) {return}  // not yet initialized
+    closeTagOverlay()
+    if (evt.type === 'scroll' && !window.lightbox.pswp) writeNavigation()
+    clearTimeout(GALLERY_STATE.debounceTimeout)
+    GALLERY_STATE.debounceTimeout = setTimeout(updateGallery, 150)
 }
 
 
@@ -736,7 +922,7 @@ function galleryClickHandler(evt) {
         return false
     }
     if (tagOverlay && !tagOverlay.contains(evt.target)) closeTagOverlay()
-    if (LOCAL_DEBUG && evt.target.classList.contains('thumbnail-debug')) {
+    if (DEBUG_ENABLED && evt.target.classList.contains('thumbnail-debug')) {
         evt.preventDefault()
         const index = Number(evt.target.getAttribute('data-gallery-idx'))
         const items = filtersActive() ? GALLERY_STATE.filteredItems : GALLERY_STATE.dataSource
@@ -764,6 +950,13 @@ function galleryClickHandler(evt) {
 
     const dataSource = filtersActive() ? GALLERY_STATE.filteredItems : GALLERY_STATE.dataSource
     if (!dataSource?.[galleryIndex]) return false
+    // Save the gallery position before adding an image-specific history entry.
+    writeNavigation()
+    navigationVersion += 1
+    restoringNavigation = false
+    selectedImageId = dataSource[galleryIndex].imageId
+    GALLERY_STATE.navigationNotice = ''
+    writeNavigation(true)
     window.lightbox.options.dataSource = dataSource
     window.lightbox.loadAndOpen(galleryIndex)
     return false
@@ -795,6 +988,10 @@ function navClickHandler(evt) {
 }
 
 function initHandlers() {
+    history.scrollRestoration = 'manual'
+    window.addEventListener('popstate', () => { restoreNavigation(readNavigation()) })
+    window.lightbox.on('change', lightboxChangeHandler)
+    window.lightbox.on('close', lightboxCloseHandler)
     for (const id of ['filter-reactions', 'filter-template']) {
         document.getElementById(id).addEventListener('input', filterChangeHandler)
     }
@@ -834,11 +1031,15 @@ async function initGallery() {
     GALLERY_STATE.dataSource.length = GALLERY_STATE.totalEntries
 
     initHandlers()
+    const restoration = restoreNavigation(readNavigation())
     const firstThumbSrc = await updateGallery()
+    resolveGalleryReady()
     // Neither metadata request may delay the first gallery render.
     await Promise.all([loadTelegramMetadata(firstThumbSrc), loadClassifications()])
     // The large OCR/description index starts last, after other metadata is rendered.
     await loadClassificationText()
+    resolveMetadataReady()
+    await restoration
 }
 
 initGallery()

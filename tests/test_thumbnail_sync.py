@@ -42,28 +42,29 @@ class ThumbnailSyncTests(unittest.TestCase):
         self.sp = Mock()
 
     def test_archive_commit_generates_sprites_in_www_checkout(self):
-        ingest = SimpleNamespace(update_indexes=Mock(), update_thumbnails=Mock())
+        ingest = SimpleNamespace(ingest_archive=Mock())
         archive = self.root / "archive"
+        publish = Mock()
         commit = sync_function("_commit_archive", change_dir=lambda path: contextlib.nullcontext(),
-                               ROOT_DIR=self.www, sp=self.sp, dt=dt)
+                               ROOT_DIR=self.www, _publish_generated=publish, pl=__import__('pathlib'))
         with patch.dict("sys.modules", {"ingest_uploads": ingest}), contextlib.redirect_stdout(None):
             commit(archive)
-        ingest.update_indexes.assert_called_once_with(archive)
-        ingest.update_thumbnails.assert_called_once_with(archive, self.www)
-        self.assertEqual(self.sp.call.call_args_list[0].args[0], ["git", "add", "images/"])
+        ingest.ingest_archive.assert_called_once_with(archive, self.www)
+        publish.assert_called_once_with(["images/"])
 
     def test_www_commit_includes_local_sprites_and_not_unrelated_changes(self):
         (self.www / "images").mkdir()
-        self.sp.run.return_value = SimpleNamespace(returncode=0, stdout="?? images/\n")
-        commit = sync_function("_commit_www", pl=__import__("pathlib"), sp=self.sp, dt=dt)
+        (self.www / "images/dir_index.json").write_text("{}")
+        publish = Mock()
+        commit = sync_function("_commit_www", pl=__import__("pathlib"), _publish_generated=publish)
         with change_dir(self.www), contextlib.redirect_stdout(None):
             commit()
-        staged = self.sp.call.call_args_list[0].args[0]
+        staged = publish.call_args.args[0]
         self.assertIn("images/", staged)
         self.assertIn("images/dir_index.json", staged)
         self.assertNotIn("assets/app.js", staged)
         self.assertNotIn("media.html", staged)
-        self.assertIn("images/", self.sp.run.call_args.args[0])
+        self.assertNotIn("scripts/telegram_messages_cache.json", staged)
 
     def test_ingest_cleanup_retains_local_sprites(self):
         staging = self.www / "images/2024/01"

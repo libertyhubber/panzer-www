@@ -16,6 +16,29 @@ The server handles concurrent static-file requests and negotiates gzip compressi
 for responses of at least 1 KiB. Restart any existing server to apply this change.
 For realistic loading tests, enable browser network throttling and disable caching.
 
+## Shareable gallery navigation
+
+The address bar records the gallery's active filters and selected lightbox image.
+Copy the URL to another tab or share it to restore those filters and open that image.
+Supported query parameters are:
+
+- `q`: search text (including tag-click searches).
+- `template`: the full meme-template name.
+- `reactions`: minimum Telegram reaction count.
+- `image`: a stable archive-relative image ID, such as `2024/07/filename.jpg`.
+
+Defaults are omitted. Unrelated query parameters and URL fragments are preserved.
+Filter changes, image opening and image closing create browser-history entries;
+lightbox slide changes update the current entry. Back/Forward restores filters and
+the lightbox without reloading the page. Scroll position is kept only in the tab's
+local history state, never in the URL or shared between tabs. Filter changes reset
+scroll to the top. Image links use filenames rather than list positions, so newer
+uploads do not change which image opens. Filtered image links wait for indexes and
+metadata before opening; missing or filter-excluded images leave the gallery usable
+and show a status message. These links share browsing state, not a frozen snapshot
+of metadata or archive contents. Transient tag/debug overlays and lightbox zoom are
+not stored.
+
 ## Local gallery thumbnails
 
 ```bash
@@ -80,25 +103,28 @@ sibling `panzer-archiv-*` checkouts must already exist. Git failures stop the ru
 archive staging originals are retained until archive publishing succeeds. Rerun
 after fixing the failure; unchanged repositories still retry their push. Commits
 include only generated paths, leaving unrelated staged changes out of the commit.
-Ingest also classifies pending originals using OpenAI before either repository is
-pushed, then exports both gallery classification indexes. Originals are read from
-the local archive, so newly ingested images do not need to be published first.
-Results are appended to the website's `images/classifications.jsonl`; images already
-classified with the current model, reasoning effort and schema are skipped. This
-covers all missing/outdated classifications in the archive being ingested, not just
-newly copied files, and incurs API charges for pending images. `OPENAI_API_KEY` is
-required when work is pending. A classification failure aborts publishing and
-retains successful records for the next attempt; normal sync also retains staging
-originals. Standalone ingest performs this same classification/export step but does
-not run Git itself.
+Daily sync classifies only newly downloaded originals (plus staging originals
+retained after a failed run), using both the OCR/content and tag calls before either
+repository is pushed, then exports both gallery classification indexes. It never
+classifies the unprocessed archive backlog. Originals are read from the local
+archive, so newly ingested images do not need to be published first. Results are
+appended to the website's `images/classifications.jsonl`; any existing result is
+preserved regardless of schema, model, reasoning effort or partial-stage status.
+Changing classification defaults therefore cannot trigger a paid archive-wide
+rerun during daily sync. Archive backfills, schema upgrades and partial-stage
+completion use `classify_images.py` explicitly. `OPENAI_API_KEY` is required only
+when new-image work is pending. A classification failure aborts publishing and
+retains successful records and staging originals for the next attempt.
+Standalone `ingest_uploads.py` classifies all originals without any saved result
+in the selected archive, but never refreshes existing results or runs Git itself.
 For an alternate website checkout use `ingest_uploads.py ARCHIVE --www-repo PATH`.
 
 To sync/ingest without running Git, use `make sync_and_ingest SYNC_ARGS=--no-git`
 (or `uv run --script scripts/panzer_imgsync.py --no-git`). This still downloads
-photos, updates archive indexes and local assets, classifies pending images
-(incurring API charges), and removes ingested staging originals. Without new
-photos, sync still ingests the latest populated archive to retry pending
-classifications and publishing.
+photos, updates archive indexes and local assets, classifies only new/pending
+staging originals (incurring API charges), and removes ingested staging originals.
+Without new or retained staging originals, sync still updates the latest populated
+archive's assets and retries publishing, but makes no classification API calls.
 Telegram scripts require Telethon 1.44 or newer to read version-8 session databases;
 older cached clients fail with `ValueError: too many values to unpack (expected 5)`.
 
@@ -150,7 +176,9 @@ normal sync's generated-file publication and can include other pending changes
 under `images/`. Review the working trees before publishing.
 
 The separate, git-ignored `scripts/telegram_import_state.json` stores the last
-completed Telegram ID and archives awaiting ingest. Imports checkpoint every 50
+completed Telegram ID and archives awaiting ingest/publication. A local `--ingest`
+retains the archive publication queue for a later `--ingest --publish` run.
+Imports checkpoint every 50
 history messages and on exit; rerun to resume after transfer/classification failures
 or interruption. `--limit` counts **all scanned messages**, not only new photos.
 `--restart` rescans from the oldest post without clearing reviewed mappings, and
@@ -439,14 +467,12 @@ A filename linked to several posts displays the oldest mapped post's counts.
 
 `scripts/classify_images.py` uses the OpenAI Responses API to transcribe visible
 text in its original language and identify an established meme template, if any.
-Each image uses up to three separate structured-output calls: `gpt-6-luna` handles
-OCR, languages, German description, image type and meme template; `gpt-6.1-sol`
-handles only tags with medium reasoning effort; a further `gpt-6-luna` call with
-low reasoning effort translates the tags from German to English and vice versa.
-The first two calls receive the original image, downloaded/read only once. The
-translation call receives only the normalized tag list as text, not the image,
-and is skipped if the list is empty. It needs only Python's standard library and
-`OPENAI_API_KEY`.
+Each full classification uses two structured-output calls to `gpt-6-luna`:
+low reasoning effort for OCR, languages, German description, image type and meme
+template; medium reasoning effort for tags and their German/English equivalents
+in a single bilingual request. Both calls receive the original image,
+downloaded/read only once. There is no separate translation request. The script
+needs only Python's standard library and `OPENAI_API_KEY`.
 The `@RosarotePanzer` watermark is excluded from relevant content, including when
 OCR splits it into `@Rosarote` and `Panzer` on separate lines.
 
@@ -469,14 +495,83 @@ uv run --script scripts/classify_images.py --archive --month 2024/07 --limit 5 -
 # Start with a small sample, then resume the whole archive.
 uv run --script scripts/classify_images.py --archive --month 2024/07 --limit 5
 uv run --script scripts/classify_images.py --archive --concurrency 4
+
+# Count affected images and estimate the full cost, without an API key or charges.
+uv run --script scripts/classify_images.py --archive --dry
+
+# Keep schema-4-and-newer results; classify only missing/older images.
+uv run --script scripts/classify_images.py --archive --min-schema 4 --dry
+uv run --script scripts/classify_images.py --archive --min-schema 4
+
+# Refresh only OCR/content, preserving existing tags.
+uv run --script scripts/classify_images.py --archive --ocr-only --dry
+uv run --script scripts/classify_images.py --archive --ocr-only
+
+# Refresh only tags + translations, preserving OCR/descriptions/templates.
+uv run --script scripts/classify_images.py --archive --tags-only --dry
+uv run --script scripts/classify_images.py --archive --tags-only
 ```
 
+`--ocr-only` runs the existing **content call**: OCR, languages, German alt text,
+image type and meme template. It makes no tag or translation calls, preserves
+existing tags and their API metadata, and uses an empty tag list for a new image.
+`--tags-only` runs one bilingual Luna tagging call with medium reasoning,
+preserving all content fields and content-call metadata. Archive
+images without a saved content record are skipped and reported; classify them
+with `--ocr-only` or a full run first. For explicit URLs, missing content in
+`--output` is an error detected before any image downloads or API calls. Explicit
+URL results still go to stdout; `--output` supplies the existing records for merging,
+but is only appended automatically in archive mode. The two stage options are
+mutually exclusive. `--force` reruns the selected stage(s).
+
+Partial updates record `stage_schema_versions` for `content` and `tags`, while the
+whole record's `schema_version` is their minimum. A tag refresh therefore does not
+claim that old OCR was upgraded. A new OCR-only result has content version 8 and
+tag version 0 (not yet generated); it is usable by the gallery, but not considered
+a complete classification. Repeating a partial run skips completed work for that
+stage, independently of the untouched stage's model/schema. Upgrading both stages
+brings the whole record to schema 8. Older records without stage metadata inherit
+their recorded version (an absent tag field means tag version 0).
+
+`--min-schema N` explicitly accepts schemas **N or newer**, regardless of model or
+reasoning-effort differences. It selects only missing/older results, using the
+**last appended record** for each image. With partial modes, it checks the selected
+stage's version instead of the whole record. It requires archive mode and accepts
+1–8. Without this option, current-schema/model/effort matching still applies.
+`--force` overrides acceptance. Automatic ingest/sync preserves every saved result,
+including old-schema and partial-stage records. Daily sync additionally restricts
+classification to the download/staging batch; it does not backfill the archive.
+The standalone classifier still uses strict model/effort matching unless
+`--min-schema` is supplied.
+
+`--dry` uses the same selection, month filters, force flag and attempt limit as an
+actual run, but prints an affected-image count, maximum call count and approximate
+USD cost instead of URLs. It fetches monthly archive indexes, **not images**, makes
+no OpenAI calls, writes nothing and needs no API key. Estimates sum the selected
+stages' historical mean costs for matching models/reasoning settings from
+`--output`. If usage samples are unavailable, fallback input/output counts are
+915/277 for content and 799/281 for bilingual tags, assuming uncached input.
+Content counts are historical schema-8 averages; the combined tag estimate uses
+old tag input and summed tag/translation output counts and is not yet calibrated
+for Luna medium reasoning. Historical separate-translation calls are excluded
+from new tagging estimates. Sizes, caching and reasoning can vary;
+retry charges, discounts and tax are excluded. Unknown model pricing is reported
+as unavailable, not a misleading partial total; use `--pricing` to supply content
+rates. `--dry-run` retains its existing URL-list behavior and cannot be combined
+with `--dry`.
+
 `--concurrency N` limits simultaneous download/classification jobs (default: 4).
-Each job makes its content, tag and translation calls sequentially, so at most N
+Each job makes its content and bilingual tag calls sequentially, so at most N
 API requests are in flight. A result is emitted/saved only after all required calls
 succeed.
 Use `--concurrency 1` for sequential processing or lower the value if you hit API
-rate limits. Work submission is bounded rather than queueing the entire archive;
+rate limits. Before paid work begins, batch runs discover the selected URLs and
+print the pending-image total. Each completion reports `[completed/total]`, a
+percentage, and separate success/failure counts on stderr. The total respects
+resume/schema filtering, skipped images and `--limit`; failures count as completed
+attempts, not successes. Resumed runs show progress for the remaining selected
+work, not previously completed images. Discovery collects only URLs; image downloads
+and API work submission remain bounded rather than queueing the entire archive.
 `--limit` caps attempts even when concurrency is higher than the limit.
 
 A single explicit URL still produces one pretty-printed JSON object. Multiple
@@ -495,8 +590,8 @@ and API token usage (including cached, cache-write and reasoning tokens).
 Multiple-URL runs print the same per-image diagnostics with URL-tagged, atomic
 stderr lines, plus total batch timing. Usage, response IDs and timings are
 reported separately for each call. `--pricing` applies only to the
-OCR/description/template call for all explicit URLs, never to the tag or translation
-call. The translation call uses Luna's built-in pricing.
+OCR/description/template call for all explicit URLs, never to the tag call.
+The bilingual tag call uses Luna's built-in pricing.
 
 Cost is an **estimate in USD** per returned response, not a billing lookup;
 it excludes charges from earlier retries, account discounts and tax. Built-in
@@ -504,30 +599,41 @@ it excludes charges from earlier retries, account discounts and tax. Built-in
 writes and $0.50 output per million tokens, verified on 2026-09-30 from
 [OpenAI's model pricing](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Above 272K input tokens, input/cache rates double and output is multiplied by 1.5.
-Reasoning tokens are already included in output usage and aren't charged twice.
-Unknown models/tiers report cost as unavailable rather than guessing. Sol pricing
-is not configured, so the tag call reports its token usage but cost is unavailable;
-the Luna estimate is not the total cost per image. Override the content call rates
-with `--pricing INPUT,CACHED,CACHE_WRITE,OUTPUT` using effective USD/1M token rates
+For legacy records, Sol standard-tier rates are **$2.00 input, $0.10 cached input, $2.50 cache writes
+and $10.00 output** per million tokens, verified on 2026-10-02 from
+[Sol's model pricing](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+The same >272K long-context multipliers apply to Sol. Both models now report
+per-call costs. Reasoning tokens are already included in output usage and aren't
+charged twice. Unknown models/tiers report cost as unavailable rather than guessing.
+Partial runs report only the calls actually made, not preserved historical calls.
+Override the content call rates with `--pricing INPUT,CACHED,CACHE_WRITE,OUTPUT`
+for explicit URLs or an archive `--dry` preview, using effective USD/1M token rates
 for your model/tier (custom rates are used as-is, with no long-context adjustment).
 For example: `--pricing 0.10,0.01,0.125,0.50`. Redirect stderr to a separate file
 with `2>debug.log` if needed; API keys and image base64 data are never logged.
 
 The content defaults are model `gpt-6-luna` and `--reasoning-effort low`. Use
 `--model` with an identifier available to your account if OpenAI rejects it.
-Tags always use `gpt-6.1-sol` with medium reasoning effort, independently of these
-options; tag translation always uses `gpt-6-luna` with low reasoning effort, also
-independently of these options. Your account needs access to both models. The
-image models must support image input and structured JSON output. Authentication/model configuration errors stop the run.
+Tags and translations always use one `gpt-6-luna` call with medium reasoning
+effort, independently of these options. The image models must support image input
+and structured JSON output. Authentication/model configuration errors stop the run.
 
 `--reasoning-effort` sets the content call's OpenAI `reasoning.effort` directly.
-It and `--no-reasoning` do not affect tags (medium) or tag translation (low).
+It and `--no-reasoning` do not affect bilingual tags (medium).
 Choices are `none`,
 `low`, `medium`, `high`, and `xhigh`; support varies by model. Use
 `--no-reasoning` to omit the reasoning parameter entirely and use the model's
 default (for example, with a model that doesn't support configurable reasoning).
 This differs from `--reasoning-effort none`, which explicitly requests no reasoning.
 The former `--thinking` option and `light` alias have been removed.
+
+Bilingual Luna tagging replaces Sol tagging plus a separate Luna translation
+without changing the output schema (still version 8). Normal sync/ingest preserves
+all existing results, including older schemas. Standalone strict resume treats the former
+pipeline as outdated; use `--min-schema 8` there to preserve existing results, or
+`--tags-only --dry` to preview an explicit tag refresh before spending credits.
+`--dry` uses matching bilingual medium-effort samples when available, otherwise
+the documented, provisional fallback counts.
 
 Archive mode reads `images/dir_index.json`, fetches monthly `entry_index.json`
 files from the gallery's **`archivX.derrosarotepanzer.com`** hosts, and downloads
@@ -547,11 +653,11 @@ preserved; whitespace, duplicates and the watermark are removed. Tags are
 predicted independently of Luna's OCR/template output, with a tags-only prompt
 that explicitly requests both **Stichwörter** (subject/theme/joke keywords) and
 **Bildmerkmale** (distinctive visible features) as concise entries in the same tags
-list, favoring useful search terms over incidental details. A text-only Luna call
-then generates counterpart translations: German tags gain English equivalents,
-and English tags gain German equivalents. Originals are preserved first, and
-translations are appended with case-insensitive deduplication and watermark
-removal. The prompt forbids adding new topics and inventing translations of proper
+list, favoring useful search terms over incidental details. The same image-based
+Luna call generates counterpart translations: German tags gain English equivalents,
+and English tags gain German equivalents. The prompt requests original tags first,
+followed by translations; the result receives case-insensitive deduplication and
+watermark removal. The prompt forbids adding new topics and inventing translations of proper
 names. For example:
 `["Ernie", "Bert", "Sesamstraße", "konzertsaal", "meme", "Sesame Street", "concert hall"]`.
 
@@ -559,24 +665,28 @@ Archive results are appended to `images/classifications.jsonl` (override with
 `--output PATH`). Each record includes its source URL, model, `reasoning_effort`,
 schema version, timestamp and API token usage for the content call. A separate
 `tags_call` object records the tag model, reasoning effort, response ID, returned
-model, service tier and token usage. `translation_call` records the same metadata
-for the additional Luna query (null when skipped for empty tags). The merged
-`classification` fields remain compatible with the gallery and index exporter. Completed records are flushed
-immediately and skipped on subsequent runs using the same content/tag/translation
-models, reasoning efforts and schema; `--force` appends new classifications instead. Changing the model or
-reasoning effort reclassifies images. Resume still reads legacy `thinking` fields
+model, service tier and token usage, including the bilingual output.
+`translation_call` is null for new tag results; historical separate-translation
+metadata remains readable and is preserved by OCR-only updates. The merged
+`classification` fields remain compatible with the gallery and index exporter.
+Completed records are flushed immediately. Standalone strict resume skips records
+using the same content/tag models, reasoning efforts and schema with no separate
+translation call, unless `--min-schema` supplies an explicit
+acceptance threshold; partial runs check only their selected stage. `--force`
+appends new classifications instead. Without `--min-schema`, changing the model or
+reasoning effort reclassifies the affected stage(s). Resume still reads legacy `thinking` fields
 (`light` maps to `low`; `default` or a missing field maps to an omitted parameter),
 so this terminology change alone does not trigger reclassification. New records
-only use `reasoning_effort` (null when omitted). Results from before the
-watermark-exclusion, German-alt-text, tags, separate-tag-call, German/English-only,
-Stichwörter/Bildmerkmale or cross-translation changes (schema versions 1–7) are
-reclassified on the next archive run, incurring up to three new API requests per
-image. The current schema version is 8. Avoid
+use `reasoning_effort` (null when omitted); tag-only updates can retain legacy
+content metadata. Without `--min-schema`, full archive runs reclassify results from
+before the watermark-exclusion, German-alt-text, tags, separate-tag-call,
+German/English-only, Stichwörter/Bildmerkmale or cross-translation changes
+(schema versions 1–7), incurring two new API requests per image. The current schema version is 8. Avoid
 concurrent runs writing the same output file. If interrupted during a write,
 remove/repair the partial final JSONL line before resuming.
 
-The full archive makes **up to three paid API requests per pending image**, plus
-possible retries (two when no tags require translation). `--limit` bounds the number of images attempted, not the number of API
+A full run makes **two paid API requests per pending image**, plus possible
+retries. OCR-only and tag-only runs each make one. `--limit` bounds the number of images attempted, not the number of API
 requests including retries. Image-specific failures are reported on stderr and
 retried on the next run; a run with any failures exits nonzero. Use `--timeout`
 and `--retries` to adjust network behavior. Downloaded image bytes are sent to
@@ -614,16 +724,17 @@ when it finishes. The search placeholder/status indicate loading or unavailable
 full-text data, without preventing tag search or image browsing.
 Tags and meme templates appear below the Telegram metadata in at most three lines.
 Only whole tags that fit are shown. Tags that do not fit are removed from the
-layout, and later shorter tags are still tried in the remaining space. A compact
-`...` button with optically centered periods is positioned over the tag area's
-bottom-right corner, without adding vertical space, and appears when any
-tags do not fit. Clicking it opens
-all tags and the full template name in a floating overlay beside the pointer,
-clamped inside the viewport with no gallery layout shifts. Keyboard activation
-anchors the overlay to the button. Overlay tags still apply the search/template
-filters. Close it with Escape, the close button, a second ellipsis click or an
-outside click; page scroll and resize also dismiss it. Long overlay lists scroll
-independently. Tag frequencies are counted once after loading,
+layout, and later shorter tags are still tried in the remaining space. An inline
+`+N` button appears after the visible tags when any do not fit, showing the number
+of omitted items and reserving its own space within the same three lines. Clicking
+it opens all tags and the full template name in a floating overlay beside the
+pointer, with its top aligned to the tag group and no gallery layout shifts.
+Keyboard activation anchors the overlay horizontally to the button. The overlay
+stays within the viewport, scrolling long lists within the space below its top.
+Overlay tags still apply the search/template filters. Close it with Escape, the
+close button, a second counter click or an outside click; page scroll and resize
+also dismiss it. The image metadata debug button is disabled by default; add
+`debug=1` to the query string to enable it on any host. Tag frequencies are counted once after loading,
 case-insensitively and once per classified image across the entire catalog.
 Thumbnail tags are ordered most-common-first (alphabetically on ties). All tags,
 including those used in only one image, are eligible for display; only available

@@ -367,7 +367,8 @@ def _update_images(args: list[str]) -> list[tuple[pl.Path | None, pl.Path]]:
         updates.append((www_img_dir, archiv_repo))
 
     if not updates:
-        # Retry pending classifications/pushes even when there are no new photos.
+        # Retry asset generation/pushes without classifying the archive backlog.
+        # Failed new-image classifications retain their staging originals above.
         # Future archive checkouts can exist but contain no months yet.
         archives = sorted(set(IMG_REPOS.values()), reverse=True)
         for name in archives:
@@ -409,10 +410,14 @@ def _update_dir_index(www_img_dir):
         json.dump(dir_index, fobj, sort_keys=True, indent=2)
 
 
-def _commit_archive(archiv_repo, *, no_git: bool = False):
+def _commit_archive(archiv_repo, *, no_git: bool = False,
+                    classification_paths: list[pl.Path] | None = None):
     with change_dir(archiv_repo):
         import ingest_uploads
-        ingest_uploads.ingest_archive(archiv_repo, ROOT_DIR)
+        if classification_paths is None:
+            ingest_uploads.ingest_archive(archiv_repo, ROOT_DIR)
+        else:
+            ingest_uploads.ingest_archive(archiv_repo, ROOT_DIR, classification_paths=classification_paths)
 
         if not no_git:
             _publish_generated(["images/"])
@@ -455,10 +460,18 @@ def main(args: list[str]) -> int:
 
     updates = _update_images(args)
     for archiv_repo in dict.fromkeys(repo for _, repo in updates):
+        # Only this download batch (or staging originals retained after failure)
+        # may incur classification charges. No photos means an empty batch.
+        classification_paths = sorted({
+            archiv_repo / 'images' / directory.parent.name / directory.name / path.name
+            for directory, repo in updates if repo == archiv_repo and directory is not None
+            for path in directory.glob('*.jpg')
+            if path.name != 'thumbnails.jpg' and not path.name.startswith('thumbnails-')
+        })
         if options.no_git:
-            _commit_archive(archiv_repo, no_git=True)
+            _commit_archive(archiv_repo, no_git=True, classification_paths=classification_paths)
         else:
-            _commit_archive(archiv_repo)
+            _commit_archive(archiv_repo, classification_paths=classification_paths)
     # Only remove staging originals after every archive was ingested/published
     # successfully. A failure must leave them available for the next run.
     for www_img_dir, _ in updates:

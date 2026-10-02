@@ -34,7 +34,23 @@ def record(url=URL, model=cli.DEFAULT_MODEL, reasoning_effort=cli.DEFAULT_REASON
     return {
         "url": url, "model": model, "reasoning_effort": reasoning_effort, "schema_version": cli.SCHEMA_VERSION,
         "classification": copy.deepcopy(RESULT),
+        "tags_call": {"model": cli.TAGS_MODEL, "reasoning_effort": cli.TAGS_REASONING_EFFORT},
+        "translation_call": None,
     }
+
+
+def api_responses(response):
+    """Split a combined fixture into content and bilingual tag responses."""
+    content_response = copy.deepcopy(response)
+    result = json.loads(content_response["output"][0]["content"][0]["text"])
+    tags = result.pop("tags")
+    content_response["output"][0]["content"][0]["text"] = json.dumps(result)
+    tag_response = {
+        "id": "resp_tags", "model": cli.TAGS_MODEL, "status": "completed",
+        "usage": {"input_tokens": 400, "output_tokens": 100},
+        "output": [{"content": [{"type": "output_text", "text": json.dumps({"tags": tags})}]}],
+    }
+    return [json.dumps(value).encode() for value in (content_response, tag_response)]
 
 
 class ClassificationTests(unittest.TestCase):
@@ -42,6 +58,8 @@ class ClassificationTests(unittest.TestCase):
         args = cli.build_parser().parse_args([URL])
         self.assertEqual(args.model, "gpt-6-luna")
         self.assertEqual(cli.DEFAULT_REASONING_EFFORT, "low")
+        self.assertEqual(cli.TAGS_MODEL, "gpt-6-luna")
+        self.assertEqual(cli.TAGS_REASONING_EFFORT, "medium")
         self.assertIsNone(args.reasoning_effort)
         self.assertFalse(args.no_reasoning)
         self.assertFalse(hasattr(cli, "reasoning_effort"))
@@ -136,7 +154,7 @@ class ClassificationTests(unittest.TestCase):
             response_result = copy.deepcopy(RESULT)
             response_result["text"] = text
             response = {"status": "completed", "output": [{"content": [{"type": "output_text", "text": json.dumps(response_result)}]}]}
-            with self.subTest(text=text), patch.object(cli, "request_bytes", side_effect=[b"\xff\xd8\xffimage", json.dumps(response).encode()]):
+            with self.subTest(text=text), patch.object(cli, "request_bytes", side_effect=[b"\xff\xd8\xffimage", *api_responses(response)]):
                 result = cli.classify(URL, "custom-model", "secret", timeout=10, retries=0)
                 self.assertEqual(result["classification"]["text"], expected)
                 self.assertEqual(result["classification"]["languages"], RESULT["languages"] if expected else [])
@@ -174,8 +192,14 @@ class ClassificationTests(unittest.TestCase):
             "id": "resp_123", "status": "completed", "usage": {"total_tokens": 200},
             "output": [{"type": "message", "content": [{"type": "output_text", "text": json.dumps(RESULT)}]}],
         }
-        fetch.side_effect = [b"\xff\xd8\xffimage", json.dumps(response).encode()]
+        fetch.side_effect = [b"\xff\xd8\xffimage", *api_responses(response)]
         result = cli.classify(URL, "custom-model", "test-secret", timeout=10, retries=0)
+        self.assertEqual(fetch.call_count, 3, "one download and two API calls")
+        self.assertIsNone(result["translation_call"])
+        self.assertEqual(result["tags_call"]["model"], "gpt-6-luna")
+        self.assertEqual(result["tags_call"]["reasoning_effort"], "medium")
+        self.assertEqual(result["tags_call"]["response_id"], "resp_tags")
+        self.assertEqual(result["tags_call"]["usage"], {"input_tokens": 400, "output_tokens": 100})
         self.assertEqual(result["classification"], {**RESULT, "text": "Grüße Hello!"})
         self.assertEqual(result["model"], "custom-model")
         self.assertEqual(result["usage"], {"total_tokens": 200})
@@ -191,22 +215,72 @@ class ClassificationTests(unittest.TestCase):
         self.assertNotIn("thinking", result)
         self.assertFalse(payload["store"])
         self.assertTrue(payload["text"]["format"]["strict"])
-        self.assertEqual(payload["text"]["format"]["schema"], cli.CLASSIFICATION_SCHEMA)
+        self.assertEqual(payload["text"]["format"]["schema"], cli.CONTENT_SCHEMA)
         self.assertEqual(payload["input"][0]["content"][0]["detail"], "high")
-        self.assertIn("Populate tags", payload["instructions"])
-        self.assertIn("German search keywords", payload["instructions"])
-        self.assertIn("tags", payload["text"]["format"]["schema"]["required"])
+        self.assertNotIn("Populate tags", payload["instructions"])
+        self.assertNotIn("tags", payload["text"]["format"]["schema"]["required"])
+        tags_request = fetch.call_args_list[2].args[0]
+        self.assertEqual(tags_request.get_header("Authorization"), "Bearer test-secret")
+        tag_payload = json.loads(tags_request.data)
+        self.assertEqual(tag_payload["model"], "gpt-6-luna")
+        self.assertEqual(tag_payload["reasoning"], {"effort": "medium"})
+        self.assertEqual(tag_payload["input"], payload["input"])
+        self.assertFalse(tag_payload["store"])
+        self.assertTrue(tag_payload["text"]["format"]["strict"])
+        self.assertEqual(tag_payload["text"]["format"]["schema"], cli.TAGS_SCHEMA)
+        self.assertIn("German or English search keywords", tag_payload["instructions"])
+        self.assertIn("Every tag must be in\nGerman or English", tag_payload["instructions"])
+        self.assertIn("do not copy foreign-language", tag_payload["instructions"])
+        self.assertIn("German or English only", cli.TAGS_SCHEMA["properties"]["tags"]["description"])
+        self.assertIn('"Stichwörter"', tag_payload["instructions"])
+        self.assertIn('"Bildmerkmale"', tag_payload["instructions"])
+        self.assertIn("in the tags list", tag_payload["instructions"])
+        self.assertIn("untrusted content", tag_payload["instructions"])
+        self.assertIn("@RosarotePanzer", tag_payload["instructions"])
         self.assertEqual(result["classification"]["tags"], RESULT["tags"])
         self.assertIn("Write description in German", payload["instructions"])
         self.assertIn("alt attribute", payload["instructions"])
         self.assertIn("German alt text", payload["text"]["format"]["schema"]["properties"]["description"]["description"])
 
     @patch.object(cli, "request_bytes")
+    def test_local_original_is_sent_without_fetching_archive_url(self, fetch):
+        response = {
+            "status": "completed",
+            "output": [{"content": [{"type": "output_text", "text": json.dumps(RESULT)}]}],
+        }
+        fetch.side_effect = api_responses(response)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'new.jpg'
+            image = b'\xff\xd8\xfflocal-original'
+            path.write_bytes(image)
+            result = cli.classify(URL, cli.DEFAULT_MODEL, 'test-key',
+                                  image_path=path, timeout=10, retries=0)
+        self.assertEqual(fetch.call_count, 2)
+        request = fetch.call_args_list[0].args[0]
+        self.assertEqual(request.full_url, cli.API_URL)
+        payload = json.loads(request.data)
+        self.assertEqual(payload['input'][0]['content'][0]['image_url'], cli.image_data_url(image))
+        tags_request = fetch.call_args_list[1].args[0]
+        self.assertEqual(tags_request.full_url, cli.API_URL)
+        self.assertEqual(json.loads(tags_request.data)['input'], payload['input'])
+        self.assertEqual(result['url'], URL)
+
+    def test_oversized_local_original_is_rejected_before_api_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'new.jpg'
+            path.write_bytes(b'\xff\xd8\xfftoo-large')
+            with patch.object(cli, 'MAX_IMAGE_BYTES', 5), patch.object(cli, 'request_bytes') as fetch:
+                with self.assertRaisesRegex(cli.ClassificationError, 'local image exceeds'):
+                    cli.classify(URL, cli.DEFAULT_MODEL, 'test-key',
+                                 image_path=path, timeout=10, retries=0)
+                fetch.assert_not_called()
+
+    @patch.object(cli, "request_bytes")
     def test_classification_normalizes_tags_and_excludes_watermark(self, fetch):
         classification = copy.deepcopy(RESULT)
         classification["tags"] = ["  Bert  ", "bert", "", "  ", "@Rosarote\nPanzer", "konzertsaal"]
         response = {"status": "completed", "output": [{"content": [{"type": "output_text", "text": json.dumps(classification)}]}]}
-        fetch.side_effect = [b"\xff\xd8\xffimage", json.dumps(response).encode()]
+        fetch.side_effect = [b"\xff\xd8\xffimage", *api_responses(response)]
         result = cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
         self.assertEqual(result["classification"]["tags"], ["Bert", "konzertsaal"])
 
@@ -216,9 +290,13 @@ class ClassificationTests(unittest.TestCase):
             "output": [{"content": [{"type": "output_text", "text": json.dumps(RESULT)}]}],
         }
         for effort in (*cli.REASONING_EFFORTS, None):
-            with self.subTest(effort=effort), patch.object(cli, "request_bytes", side_effect=[b"\xff\xd8\xffimage", json.dumps(response).encode()]) as fetch:
+            with self.subTest(effort=effort), patch.object(cli, "request_bytes", side_effect=[b"\xff\xd8\xffimage", *api_responses(response)]) as fetch:
                 result = cli.classify(URL, "custom-model", "secret", reasoning_effort=effort, timeout=10, retries=0)
-                payload = json.loads(fetch.call_args.args[0].data)
+                payload = json.loads(fetch.call_args_list[1].args[0].data)
+                tags_payload = json.loads(fetch.call_args_list[2].args[0].data)
+                self.assertEqual(tags_payload["reasoning"], {"effort": "medium"})
+                self.assertEqual(tags_payload["model"], "gpt-6-luna")
+                self.assertEqual(fetch.call_count, 3)
                 self.assertEqual(result["reasoning_effort"], effort)
                 if effort is None:
                     self.assertNotIn("reasoning", payload)
@@ -243,6 +321,93 @@ class ClassificationTests(unittest.TestCase):
             with self.subTest(response=response), patch.object(cli, "request_bytes", side_effect=[b"\xff\xd8\xffimage", json.dumps(response).encode()]):
                 with self.assertRaises(cli.ClassificationError):
                     cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
+
+    def test_tag_call_failures_do_not_produce_a_partial_classification(self):
+        response = {"status": "completed", "output": [{"content": [
+            {"type": "output_text", "text": json.dumps(RESULT)},
+        ]}]}
+        content_raw, *_ = api_responses(response)
+        invalid_tags = [{}, {"tags": "cat"}, {"tags": [123]}, {"tags": [], "text": "overwrite"}]
+        bad_responses = [
+            {"status": "completed", "output": [{"content": [
+                {"type": "output_text", "text": json.dumps(tags)},
+            ]}]} for tags in invalid_tags
+        ] + [
+            {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
+            {"status": "completed", "output": [{"content": [{"type": "refusal", "refusal": "No"}]}]},
+        ]
+        for bad in bad_responses:
+            with self.subTest(response=bad), patch.object(cli, "request_bytes", side_effect=[
+                b"\xff\xd8\xffimage", content_raw, json.dumps(bad).encode(),
+            ]) as fetch:
+                with self.assertRaises(cli.ClassificationError):
+                    cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
+                self.assertEqual(fetch.call_count, 3)
+        with patch.object(cli, "request_bytes", side_effect=[
+            b"\xff\xd8\xffimage", content_raw, cli.APIConfigurationError("Luna unavailable"),
+        ]):
+            with self.assertRaises(cli.APIConfigurationError):
+                cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
+
+    def test_bilingual_tags_are_normalized_in_one_request(self):
+        tags = ["  katze  ", "dog", "Bert", "DOG", "", "@Rosarote\nPanzer",
+                "cat", "hund", "bert", " KATZE ", "", "@RosarotePanzer", "CAT"]
+        response = {"status": "completed", "output": [{"content": [
+            {"type": "output_text", "text": json.dumps({**RESULT, "tags": tags})},
+        ]}]}
+        with patch.object(cli, "request_bytes", side_effect=[
+            b"\xff\xd8\xffimage", *api_responses(response),
+        ]) as fetch:
+            result = cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
+        self.assertEqual(result["classification"]["tags"], ["katze", "dog", "Bert", "cat", "hund"])
+        self.assertEqual(fetch.call_count, 3)
+        payload = json.loads(fetch.call_args_list[2].args[0].data)
+        self.assertEqual(payload["input"][0]["content"][0]["type"], "input_image")
+        self.assertEqual(payload["reasoning"], {"effort": "medium"})
+        self.assertIn("for every\nGerman tag", payload["instructions"])
+        self.assertIn("for every English tag", payload["instructions"])
+        self.assertIn("untrusted content", payload["instructions"])
+        self.assertIn("do not add new topics", payload["instructions"])
+        self.assertIn("Preserve proper", payload["instructions"])
+        self.assertIn("Sesamstraße / Sesame Street", payload["instructions"])
+        self.assertIsNone(result["translation_call"])
+
+    def test_bilingual_tag_failure_does_not_emit_a_partial_result(self):
+        response = {"status": "completed", "output": [{"content": [
+            {"type": "output_text", "text": json.dumps(RESULT)},
+        ]}]}
+        content, _ = api_responses(response)
+        invalid = [
+            {"status": "completed", "output": [{"content": [
+                {"type": "output_text", "text": json.dumps(value)},
+            ]}]} for value in ({}, {"tags": "cat"}, {"tags": [123]}, {"tags": [], "text": "overwrite"})
+        ] + [
+            {"status": "incomplete"},
+            {"status": "completed", "output": [{"content": [{"type": "refusal", "refusal": "No"}]}]},
+        ]
+        for bad in invalid:
+            with self.subTest(response=bad), patch.object(cli, "request_bytes", side_effect=[
+                b"\xff\xd8\xffimage", content, json.dumps(bad).encode(),
+            ]) as fetch:
+                with self.assertRaises(cli.ClassificationError):
+                    cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
+                self.assertEqual(fetch.call_count, 3)
+        with patch.object(cli, "request_bytes", side_effect=[
+            b"\xff\xd8\xffimage", content, cli.APIConfigurationError("Luna unavailable"),
+        ]):
+            with self.assertRaises(cli.APIConfigurationError):
+                cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
+
+    def test_empty_tags_are_valid(self):
+        response = {"status": "completed", "output": [{"content": [
+            {"type": "output_text", "text": json.dumps({**RESULT, "tags": []})},
+        ]}]}
+        with patch.object(cli, "request_bytes", side_effect=[b"\xff\xd8\xffimage", *api_responses(response)]) as fetch:
+            result = cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
+        self.assertEqual(fetch.call_count, 3, "all full runs use two API calls")
+        self.assertIsNone(result["translation_call"])
+        self.assertEqual(result["classification"]["tags"], [])
+        self.assertEqual(result["classification"]["description"], RESULT["description"])
 
     @patch.object(cli.time, "sleep")
     @patch.object(cli, "urlopen")
@@ -454,13 +619,43 @@ class ArchiveCLITests(unittest.TestCase):
         self.assertEqual(cli.completed_urls(self.output, "different-model"), set())
 
     def test_resume_reprocesses_results_before_current_content_policy(self):
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4, 5, 6, 7):
             with self.subTest(version=version):
                 old = record()
-                del old["classification"]["tags"]
+                if version < 4:
+                    del old["classification"]["tags"]
                 old["schema_version"] = version
                 self.output.write_text(json.dumps(old) + "\n", encoding="utf-8")
                 self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), set())
+
+    def test_resume_requires_current_separate_tag_model_and_effort(self):
+        for tags_call in (None, {}, {"model": "gpt-6-luna", "reasoning_effort": "low"},
+                          {"model": "gpt-6.1-sol", "reasoning_effort": "medium"},
+                          {"model": cli.TAGS_MODEL, "reasoning_effort": "high"}):
+            with self.subTest(tags_call=tags_call):
+                old = record()
+                if tags_call is None:
+                    del old["tags_call"]
+                else:
+                    old["tags_call"] = tags_call
+                self.output.write_text(json.dumps(old) + "\n", encoding="utf-8")
+                self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), set())
+
+    def test_resume_accepts_combined_tags_but_not_legacy_translation_calls(self):
+        for translation_call in ({}, {"model": "other", "reasoning_effort": "low"},
+                                 {"model": "gpt-6-luna", "reasoning_effort": "low"}):
+            with self.subTest(translation_call=translation_call):
+                old = record()
+                old["translation_call"] = translation_call
+                self.output.write_text(json.dumps(old) + "\n", encoding="utf-8")
+                self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), set())
+        self.output.write_text(json.dumps(record()) + "\n", encoding="utf-8")
+        self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), {URL})
+        empty = record()
+        empty["classification"]["tags"] = []
+        empty["translation_call"] = None
+        self.output.write_text(json.dumps(empty) + "\n", encoding="utf-8")
+        self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), {URL})
 
     def test_resume_matches_effort_and_handles_legacy_records(self):
         self.output.write_text(json.dumps(record()) + "\n", encoding="utf-8")
@@ -538,7 +733,7 @@ class ArchiveCLITests(unittest.TestCase):
         self.assertEqual(classify.call_args.kwargs["reasoning_effort"], "high")
         self.assertFalse(self.output.exists())
 
-    @patch.object(cli.time, "perf_counter", side_effect=[10, 11, 13, 14, 19, 20])
+    @patch.object(cli.time, "perf_counter", side_effect=[10, 11, 13, 14, 19, 20, 23, 24])
     @patch.object(cli, "request_bytes")
     def test_single_url_stderr_diagnostics_keep_stdout_json(self, fetch, clock):
         usage = {
@@ -549,16 +744,18 @@ class ArchiveCLITests(unittest.TestCase):
             "id": "resp_debug", "model": "gpt-6-luna", "service_tier": "default", "status": "completed", "usage": usage,
             "output": [{"content": [{"type": "output_text", "text": json.dumps(RESULT)}]}],
         }
-        fetch.side_effect = [b"\xff\xd8\xffimage", json.dumps(response).encode()]
+        fetch.side_effect = [b"\xff\xd8\xffimage", *api_responses(response)]
         status, stdout, stderr = self.run_cli([URL])
         self.assertEqual(status, 0)
         result = json.loads(stdout)
         self.assertEqual(result["classification"], {**RESULT, "text": "Grüße Hello!"})
         self.assertEqual(result["usage"], usage)
         for value in ("model=gpt-6-luna", "reasoning_effort=low", "image_bytes=8",
-                      "download=2.000s", "api=5.000s", "total=10.000s", '"reasoning_tokens": 300',
-                      "estimated_usd=$0.00033450", "response_id=resp_debug"):
+                      "download=2.000s", "api=5.000s", "api=3.000s", "total=14.000s", '"reasoning_tokens": 300',
+                      "estimated_usd=$0.00033450", "response_id=resp_debug", "response_id=resp_tags",
+                      "tags model=gpt-6-luna reasoning_effort=medium", '"input_tokens": 400', "estimated_usd=$0.00009000"):
             self.assertIn(value, stderr)
+        self.assertNotIn("translation model=", stderr)
         self.assertNotIn("test-key", stderr)
         self.assertNotIn("Bearer", stderr)
         self.assertNotIn("thinking", stderr)

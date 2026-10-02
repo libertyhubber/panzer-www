@@ -100,14 +100,17 @@ def update_indexes(archive_repo_dir: pl.Path) -> None:
 
 
 def update_classifications(archive_repo_dir: pl.Path, www_repo_dir: pl.Path = ROOT_DIR,
-                           *, concurrency: int = 4) -> int:
-    """Classify pending local originals and export website indexes before publishing."""
+                           *, concurrency: int = 4,
+                           classification_paths: list[pl.Path] | None = None) -> int:
+    """Classify only unseen originals; optionally restrict work to an ingest batch."""
     output = www_repo_dir / 'images/classifications.jsonl'
-    completed = classifier.completed_urls(output, classifier.DEFAULT_MODEL,
-                                          classifier.DEFAULT_REASONING_EFFORT)
+    # Any saved record is off-limits to automatic ingest, including old schemas
+    # and partial runs. Archive refreshes belong in classify_images.py only.
+    completed = set(classifier.latest_records(output))
     archive_images = archive_repo_dir / 'images'
+    paths = archive_images.glob('*/*/*.jpg') if classification_paths is None else classification_paths
     pending = {}
-    for path in sorted(archive_images.glob('*/*/*.jpg')):
+    for path in sorted(set(paths)):
         if path.name == 'thumbnails.jpg' or path.name.startswith('thumbnails-'):
             continue
         relative = path.relative_to(archive_images)
@@ -161,10 +164,14 @@ def update_classifications(archive_repo_dir: pl.Path, www_repo_dir: pl.Path = RO
     return succeeded
 
 
-def ingest_archive(archive_repo_dir: pl.Path, www_repo_dir: pl.Path = ROOT_DIR) -> None:
+def ingest_archive(archive_repo_dir: pl.Path, www_repo_dir: pl.Path = ROOT_DIR,
+                   *, classification_paths: list[pl.Path] | None = None) -> None:
     update_indexes(archive_repo_dir)
     update_thumbnails(archive_repo_dir, www_repo_dir)
-    update_classifications(archive_repo_dir, www_repo_dir)
+    if classification_paths is None:
+        update_classifications(archive_repo_dir, www_repo_dir)
+    else:
+        update_classifications(archive_repo_dir, www_repo_dir, classification_paths=classification_paths)
 
 
 def mk_datestr(datestr=None):

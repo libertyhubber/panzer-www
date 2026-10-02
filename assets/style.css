@@ -317,33 +317,19 @@ body {
 }
 
 .classification-more {
-	position: absolute;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	bottom: 0;
-	right: 0;
-	width: 24px;
-	height: 10px;
-	padding: 0;
+	flex: 0 0 auto;
+	border: 0;
+	padding: 0 4px;
 	border-radius: 3px;
 	background: #252525;
 	color: #ddd;
 	font: inherit;
-	font-size: 16px;
-	letter-spacing: -0.5pt;
-	line-height: 10px;
+	white-space: nowrap;
 	cursor: pointer;
 }
 
 .classification-more[hidden] {
 	display: none;
-}
-
-.classification-more span {
-	line-height: 1;
-	/* Periods sit at the baseline; lift their ink to the button's visual center. */
-	transform: translateY(-0.3em);
 }
 
 .classification-more:hover,
@@ -358,6 +344,7 @@ body {
 
 #all-tags-overlay {
 	position: fixed;
+	box-sizing: border-box;
 	z-index: 10;
 	width: min(320px, calc(100vw - 16px));
 	max-height: min(360px, calc(100vh - 16px));
@@ -373,12 +360,6 @@ body {
 	text-align: left;
 }
 
-#all-tags-overlay h2 {
-	font-size: 14px;
-	padding-right: 24px;
-	margin-bottom: 8px;
-}
-
 .tags-overlay-close {
 	position: absolute;
 	top: 8px;
@@ -390,6 +371,7 @@ body {
 }
 
 .tags-overlay-list {
+	padding-right: 24px;
 	display: flex;
 	flex-wrap: wrap;
 	gap: 4px;
