@@ -27,7 +27,7 @@ body {
 
 .container {
 	margin: 0 auto;
-	max-width: 1496px; /* Six 236px gallery cards plus 80px side margins. */
+	max-width: 1520px; /* Six 240px grid slots (20px gaps) plus 80px side margins. */
 }
 
 #top-nav,
@@ -211,21 +211,30 @@ body {
 	padding-left: 90px;
 	text-align: right;
 }
-#filter-template { max-width: 230px; }
+/* Fix the wrapper width before options load; select text must not resize it. */
+#gallery-filters .filter-template {
+	width: 170px;
+	flex: 0 0 170px;
+}
+#filter-template { max-width: 170px; }
 #gallery-filters .filter-search { flex: 1 1 240px; }
 #filter-search::-webkit-search-cancel-button {
 	padding: 6px;
 	cursor: pointer;
 }
+#gallery-filters input,
+#gallery-filters select { height: 38px; }
 #gallery-filters :focus-visible { outline: 2px solid #fae; }
 #filter-status { width: 100%; font-size: 14px; color: #bbb; }
 #filter-status:empty { display: none; }
 
 .gallery-item {
 	position: absolute;
-	width: 236px;
-	height: 364px;
-	padding: 8px;
+	/* JS sets card dimensions and positions, including 15px vertical gaps. */
+	width: var(--thumbnail-display-size, 220px);
+	height: var(--gallery-card-height, 290px);
+	border-radius: 5px;
+	overflow: clip;
 	text-align: left;
 }
 
@@ -234,11 +243,10 @@ body {
 	position: relative;
 	background-color: #888;
 	background-repeat: no-repeat;
-	width: 220px;
-	height: 220px;
+	width: var(--thumbnail-display-size, 220px);
+	height: var(--thumbnail-display-size, 220px);
 }
 
-.thumbnail:hover,
 .thumbnail:focus-visible {
 	outline: 2px solid #fae;
 }
@@ -249,10 +257,10 @@ body {
 	flex-wrap: wrap;
 	align-items: baseline;
 	column-gap: 8px;
-	min-height: 43px;
-	padding-top: 7px;
+	min-height: 31px;
+	padding-top: 1px;
 	font-size: 12px;
-	line-height: 18px;
+	line-height: 24px;
 	color: #bbb;
 }
 
@@ -277,8 +285,7 @@ body {
 .thumbnail-classification {
 	flex-basis: 100%;
 	min-width: 0;
-	height: 80px;
-	padding-top: 6px;
+	height: 39px;
 	overflow: hidden;
 }
 
@@ -289,7 +296,8 @@ body {
 	align-content: flex-start;
 	align-items: flex-start;
 	gap: 3px;
-	height: 60px; /* Three 18px lines plus two 3px row gaps. */
+	height: 39px; /* Two 18px lines plus one 3px row gap. */
+	line-height: 18px;
 	overflow: hidden;
 }
 
@@ -309,7 +317,7 @@ body {
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
-	background: #252525;
+	background: transparent;
 	border-radius: 3px;
 	padding: 0 4px;
 	overflow-wrap: anywhere;
@@ -486,8 +494,24 @@ body {
 	#top-nav .nav.supports {
 		right: 8px;
 	}
-	#top-nav > span.active,
+	#top-nav > span.active {
 		background: #333;
+	}
+}
+
+@media screen and (max-width: 600px) {
+	#gallery-filters {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+	#gallery-filters .filter-reactions,
+	#gallery-filters .filter-template {
+		width: 100%;
+	}
+	#gallery-filters .filter-search,
+	#filter-status {
+		grid-column: 1 / -1;
 	}
 }
 

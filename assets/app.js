@@ -6,9 +6,15 @@ const THUMBNAIL_SIZE = 220
 const IMAGES_PER_SHEET = 20
 const SHEET_COLUMNS = 5
 const THUMBNAIL_PADDING = 2
-const THUMBNAIL_MARGIN = 16
-const THUMBNAIL_WIDTH = THUMBNAIL_SIZE + THUMBNAIL_MARGIN
-const THUMBNAIL_ROW_HEIGHT = 364
+const THUMBNAIL_SHEET_WIDTH = SHEET_COLUMNS * THUMBNAIL_SIZE + (SHEET_COLUMNS - 1) * THUMBNAIL_PADDING
+const COMPACT_HORIZONTAL_GAP = 7
+const COMPACT_OUTER_GUTTER = 4
+const MIN_TWO_COLUMN_WIDTH = 320
+const THUMBNAIL_GAP = 8
+const MAX_HORIZONTAL_GAP = 20
+const THUMBNAIL_WIDTH = THUMBNAIL_SIZE + THUMBNAIL_GAP
+const GALLERY_CARD_HEIGHT = 290
+const VERTICAL_GAP = 15
 const DEBUG_ENABLED = new URL(location.href).searchParams.get('debug') === '1'
 const ORIGINAL_LOAD_LIMIT = 4
 const GALLERY_IMAGES = new Map()
@@ -233,6 +239,7 @@ async function loadMonthItems(dirName, dirStartIndex) {
             src: `${host}/images/${dirName}/${entry.name}`,
             width: entry.w,
             height: entry.h,
+            bg: typeof entry.bg === 'string' && /^[0-9a-f]{3}$/i.test(entry.bg) ? entry.bg : '000',
             bgOffsetX: (localIndex % SHEET_COLUMNS) * stride,
             bgOffsetY: Math.floor(localIndex / SHEET_COLUMNS) * stride,
             thumbSrc: thumbSrc,
@@ -309,6 +316,30 @@ function tagKey(tag) {
     return tag.trim().toLowerCase()
 }
 
+// Tags have no language metadata. Only recognize clear English vocabulary;
+// shared words (meme, comic, satire, humor, etc.) and unrecognized names stay inline.
+// This is a display hint, never a change to the classification/search data.
+const ENGLISH_TAG_WORDS = new Set((
+    'political reaction caption captioned speech bubbles bubble image images ' +
+    'german english dark black white criticism state government taxes theft ' +
+    'communism socialism capitalism libertarianism statism anarchism libertarians ' +
+    'statists socialists politicians democracy freedom cryptocurrency comparison ' +
+    'overlay over with without two three four part close up ' +
+    'sunglasses glasses skeptical look expression double standards tax office ' +
+    'woman women bearded crowd hammer sickle conspiracy theory theories ' +
+    'media split pun climate change classroom serious flag soldier police ' +
+    'military money economy election voting censorship surveillance ' +
+    'health healthcare education school teacher children child cat dog ' +
+    'funny angry happy sad surprised smiling laughing crying pointing sitting ' +
+    'standing wearing suit the of and'
+).split(' '))
+
+function isClearlyEnglishTag(tag) {
+    // Keep mixed-language tags with explicit German characters in the preview.
+    if (/[äöüß]/i.test(tag)) return false
+    return tagKey(tag).split(/[^a-z]+/).some(word => ENGLISH_TAG_WORDS.has(word))
+}
+
 function countCatalogTags(index) {
     const counts = new Map()
     for (const classification of Object.values(index)) {
@@ -335,7 +366,7 @@ function classificationHTML(classification, imageId) {
     const sortedTags = [...classification.tags]
         .sort((a, b) => frequency(b) - frequency(a) || a.localeCompare(b, 'de'))
     const tags = sortedTags
-        .map(tag => `<button type="button" class="classification-tag">${escapeHtml(tag)}</button>`)
+        .map(tag => `<button type="button" class="classification-tag"${isClearlyEnglishTag(tag) ? ' data-overlay-only="true"' : ''}>${escapeHtml(tag)}</button>`)
         .join('')
     return `<div class="thumbnail-classification">` +
         (template || classification.tags.length ?
@@ -414,14 +445,14 @@ function usesOriginal(item, filtered) {
         GALLERY_IMAGES.get(item.thumbSrc)?.status === 'failed'
 }
 
-function showOriginal(src) {
+function showOriginal(item) {
     // Only mutate currently rendered links; async loads may outlive a filter or scroll.
     for (const thumbnail of document.getElementById('gallery').querySelectorAll('.thumbnail')) {
-        if (thumbnail.getAttribute('href') !== src) continue
-        thumbnail.style.backgroundImage = `url('${src}')`
+        if (thumbnail.getAttribute('href') !== item.src) continue
+        thumbnail.style.backgroundImage = `url('${item.src}')`
         thumbnail.style.backgroundPosition = 'center'
         thumbnail.style.backgroundSize = 'contain'
-        thumbnail.style.backgroundColor = 'black'
+        thumbnail.style.backgroundColor = `#${item.bg}`
     }
 }
 
@@ -433,7 +464,7 @@ function loadOriginals() {
         activeOriginalLoads += 1
         galleryImage(item.src, 'low').promise.then(loaded => {
             activeOriginalLoads -= 1
-            if (loaded) showOriginal(item.src)
+            if (loaded) showOriginal(item)
             // A failed original leaves its sprite preview intact, without retry loops.
             loadOriginals()
         })
@@ -454,7 +485,7 @@ function enhanceThumbnails(items, filtered) {
             if (!loaded) {
                 // Missing/corrupt sheets are optional too, not broken gallery tiles.
                 for (const item of upgradeCandidates) {
-                    if (item.thumbSrc === src) showOriginal(item.src)
+                    if (item.thumbSrc === src) showOriginal(item)
                 }
             }
             loadOriginals()
@@ -624,8 +655,26 @@ async function updateGallery() {
 
     const galleryNode = document.getElementById("gallery")
 
-    const tnColumns = Math.max(1, Math.floor(galleryNode.clientWidth / THUMBNAIL_WIDTH))
-    const marginLeft = Math.round((galleryNode.clientWidth - (tnColumns * THUMBNAIL_WIDTH)) / 2)
+    const galleryWidth = galleryNode.clientWidth
+    const compact = galleryWidth < 2 * THUMBNAIL_WIDTH
+    // Narrow galleries fit two whole-pixel thumbnails with a 7px gap and at
+    // least 4px outer gutters. Fall back to one column below 320px.
+    const tnColumns = compact ? (galleryWidth >= MIN_TWO_COLUMN_WIDTH ? 2 : 1)
+        : Math.floor(galleryWidth / THUMBNAIL_WIDTH)
+    const cardWidth = compact ? Math.max(1, Math.min(THUMBNAIL_SIZE, Math.floor(
+        (galleryWidth - 2 * COMPACT_OUTER_GUTTER - (tnColumns - 1) * COMPACT_HORIZONTAL_GAP) / tnColumns
+    ))) : THUMBNAIL_SIZE
+    // Full-size cards keep the existing 8–20px gaps, favoring more columns.
+    const horizontalGap = compact ? COMPACT_HORIZONTAL_GAP : Math.min(MAX_HORIZONTAL_GAP,
+        Math.max(THUMBNAIL_GAP, galleryWidth / tnColumns - THUMBNAIL_SIZE))
+    // Shrink only the image portion; keep metadata text and its space unscaled.
+    const cardHeight = GALLERY_CARD_HEIGHT - THUMBNAIL_SIZE + cardWidth
+    const rowHeight = cardHeight + VERTICAL_GAP
+    const columnWidth = cardWidth + horizontalGap
+    const marginLeft = (galleryWidth - tnColumns * cardWidth - (tnColumns - 1) * horizontalGap) / 2
+    const spriteScale = cardWidth / THUMBNAIL_SIZE
+    galleryNode.style.setProperty('--thumbnail-display-size', `${cardWidth}px`)
+    galleryNode.style.setProperty('--gallery-card-height', `${cardHeight}px`)
 
     const version = GALLERY_STATE.filterVersion
     const filtered = filtersActive()
@@ -638,7 +687,7 @@ async function updateGallery() {
     }
     const totalEntries = filtered ? GALLERY_STATE.filteredItems.length : GALLERY_STATE.totalEntries
     const totalRows = Math.ceil(totalEntries / tnColumns)
-    galleryNode.style.height = (totalRows * THUMBNAIL_ROW_HEIGHT) + "px"
+    galleryNode.style.height = (totalRows * rowHeight) + "px"
     status.textContent = filtered
         ? `${totalEntries} passende Bilder` + (GALLERY_STATE.allItemsError
             ? ' (Archiv unvollständig geladen. Ändere einen Filter, um es erneut zu versuchen.)'
@@ -651,12 +700,12 @@ async function updateGallery() {
 
     const scrollTop = document.documentElement.scrollTop
     const galleryTop = galleryNode.getBoundingClientRect ? galleryNode.getBoundingClientRect().top + scrollTop : 0
-    const viewportHeight = document.documentElement.clientHeight || window.innerHeight || THUMBNAIL_ROW_HEIGHT
+    const viewportHeight = document.documentElement.clientHeight || window.innerHeight || rowHeight
     // CSS backgrounds load as soon as they are rendered, even far offscreen.
     // Keep just one extra row on either side of the actual viewport.
-    const firstRow = Math.min(Math.max(0, Math.floor((scrollTop - galleryTop) / THUMBNAIL_ROW_HEIGHT) - 1), Math.max(0, totalRows - 1))
+    const firstRow = Math.min(Math.max(0, Math.floor((scrollTop - galleryTop) / rowHeight) - 1), Math.max(0, totalRows - 1))
     const endRow = Math.min(totalRows, Math.max(firstRow + 1,
-        Math.ceil((scrollTop + viewportHeight - galleryTop) / THUMBNAIL_ROW_HEIGHT) + 1))
+        Math.ceil((scrollTop + viewportHeight - galleryTop) / rowHeight) + 1))
     const scrollEntry = firstRow * tnColumns
     const endEntry = Math.min(totalEntries, endRow * tnColumns)
 
@@ -683,7 +732,7 @@ async function updateGallery() {
         }
     }
 
-    const renderState = scrollEntry + ":" + endEntry + ":" + tnColumns + ":" + parseInt(window.innerWidth / 10) + ":" + GALLERY_STATE.classificationStatus + ":" + GALLERY_STATE.classificationTextStatus + ":" + GALLERY_STATE.telegramStatus + ":" + version
+    const renderState = scrollEntry + ":" + endEntry + ":" + tnColumns + ":" + galleryWidth + ":" + GALLERY_STATE.classificationStatus + ":" + GALLERY_STATE.classificationTextStatus + ":" + GALLERY_STATE.telegramStatus + ":" + version
 
     if (GALLERY_STATE.lastRenderState == renderState) {
         enhanceThumbnails(ds.dataSourceItems, filtered)
@@ -695,7 +744,7 @@ async function updateGallery() {
     var entryRow = 0
     var entryCol = ds.dirStartIndex % tnColumns
 
-    const dirOffsetTop = Math.round(((ds.dirStartIndex - entryCol) / tnColumns) * THUMBNAIL_ROW_HEIGHT)
+    const dirOffsetTop = Math.round(((ds.dirStartIndex - entryCol) / tnColumns) * rowHeight)
 
     const thumbnailsHTML = []
     const countFormat = new Intl.NumberFormat('de', { notation: 'compact', maximumFractionDigits: 1 })
@@ -706,8 +755,8 @@ async function updateGallery() {
         const classification = GALLERY_STATE.classificationIndex[item.imageId]
         const imageLabel = GALLERY_STATE.classificationTextIndex[item.imageId]?.description || `Bild vom ${item.date || 'unbekannten Datum'} öffnen`
 
-        const offsetTop = dirOffsetTop + (entryRow * THUMBNAIL_ROW_HEIGHT)
-        const offsetLeft = marginLeft + entryCol * THUMBNAIL_WIDTH
+        const offsetTop = dirOffsetTop + (entryRow * rowHeight)
+        const offsetLeft = marginLeft + entryCol * columnWidth
 
         const itemStyles = [
             `top: ${offsetTop}px;`,
@@ -719,11 +768,14 @@ async function updateGallery() {
             `background-image: url('${item.src}');`,
             `background-position: center;`,
             `background-size: contain;`,
-            `background-color: black;`,
         ] : [
             `background-image: url('${item.thumbSrc}');`,
-            `background-position: -${item.bgOffsetX}px -${item.bgOffsetY}px;`,
+            `background-position: -${item.bgOffsetX * spriteScale}px -${item.bgOffsetY * spriteScale}px;`,
+            // Scale the existing sheet, including its tile padding. Auto height
+            // also handles partially filled sheets without changing generation.
+            ...(spriteScale === 1 ? [] : [`background-size: ${THUMBNAIL_SHEET_WIDTH * spriteScale}px auto;`]),
         ]
+        thumbStyles.push(`background-color: #${item.bg};`)
         const thumbAttrs = [
             `href="${item.src}"`,
             `class="thumbnail"`,
@@ -784,9 +836,16 @@ function fitClassificationTags(galleryNode) {
         }
         const pack = reserveCounter => {
             let visible = 0
-            for (const tag of tags) tag.style.display = 'none'
+            for (const tag of tags) {
+                tag.style.display = 'none'
+                tag.style.visibility = 'hidden'
+                tag.disabled = true
+                tag.tabIndex = -1
+            }
             if (reserveCounter) setCount(tags.length)
             for (const tag of tags) {
+                // Overlay-only tags still contribute to the +N counter.
+                if (tag.getAttribute?.('data-overlay-only') === 'true') continue
                 tag.style.display = ''
                 if (reserveCounter) setCount(tags.length - visible - 1)
                 const fits = fitsBounds(tag.getBoundingClientRect()) &&

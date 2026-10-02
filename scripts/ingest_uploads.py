@@ -18,13 +18,18 @@ from PIL import Image
 if __package__:
     from . import classify_images as classifier
     from .export_classifications import export_index
-    from .generate_thumbnails import ROOT_DIR, update_thumbnails
+    from .generate_thumbnails import ROOT_DIR, background_color, update_thumbnails
 else:
     import classify_images as classifier
     from export_classifications import export_index
-    from generate_thumbnails import ROOT_DIR, update_thumbnails
+    from generate_thumbnails import ROOT_DIR, background_color, update_thumbnails
 
-def update_indexes(archive_repo_dir: pl.Path) -> None:
+def needs_background(width: int, height: int) -> bool:
+    """Omit bg below 5% dimension difference; integer arithmetic keeps the boundary exact."""
+    return abs(width - height) * 20 >= max(width, height)
+
+
+def update_indexes(archive_repo_dir: pl.Path, *, refresh_backgrounds: bool = False) -> None:
     archiv_img_dir = archive_repo_dir / "images"
     assert archiv_img_dir.exists(), archiv_img_dir
 
@@ -73,19 +78,27 @@ def update_indexes(archive_repo_dir: pl.Path) -> None:
         old_entries = {entry['name']: entry for entry in old_entry_index}
 
         for img_path in img_paths:
-            if img_path.name in old_entries:
-                old_entry = old_entries[img_path.name]
+            old_entry = old_entries.get(img_path.name)
+            if old_entry is not None and (
+                not needs_background(old_entry['w'], old_entry['h'])
+                or ('bg' in old_entry and not refresh_backgrounds)
+            ):
                 img_width, img_height = old_entry['w'], old_entry['h']
+                bg = old_entry.get('bg')
             else:
                 with Image.open(img_path) as img:
                     img_width, img_height = img.size
+                    bg = background_color(img) if needs_background(img_width, img_height) else None
 
             # Sprite coordinates are derived from the final local index order.
-            new_entry_index.append({
+            entry = {
                 'w': img_width,
                 'h': img_height,
                 'name': img_path.name,
-            })
+            }
+            if needs_background(img_width, img_height):
+                entry['bg'] = bg
+            new_entry_index.append(entry)
 
         new_entry_index.sort(key=lambda e: e['name'])
         new_entry_index_data = (
@@ -100,7 +113,7 @@ def update_indexes(archive_repo_dir: pl.Path) -> None:
 
 
 def update_classifications(archive_repo_dir: pl.Path, www_repo_dir: pl.Path = ROOT_DIR,
-                           *, concurrency: int = 4,
+                           *, concurrency: int = 10,
                            classification_paths: list[pl.Path] | None = None) -> int:
     """Classify only unseen originals; optionally restrict work to an ingest batch."""
     output = www_repo_dir / 'images/classifications.jsonl'

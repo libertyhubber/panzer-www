@@ -6,7 +6,7 @@
     <span class="filter-input-prefix" aria-hidden="true">Reaktionen</span>
     <input id="filter-reactions" aria-label="Mindestens Reaktionen" type="number" min="0" step="1" value="0">
   </label>
-  <label>
+  <label class="filter-template">
     <select id="filter-template" aria-label="Vorlage" disabled><option value="">Alle Vorlagen</option></select>
   </label>
   <label class="filter-search">
@@ -57,7 +57,7 @@ window.fetchJson = fetchJson;
 
 const appNode = document.createElement("script")
 appNode.setAttribute("type", "text/javascript")
-appNode.setAttribute("src", "/assets/app.js?cb=35")
+appNode.setAttribute("src", "/assets/app.js?cb=43")
 document.body.appendChild(appNode)
 
 appNode.addEventListener("load", function(){

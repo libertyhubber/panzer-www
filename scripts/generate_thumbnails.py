@@ -6,6 +6,7 @@
 """Generate local gallery sprites from archive originals, without storing originals."""
 
 import argparse
+import collections
 import io
 import json
 import math
@@ -79,6 +80,30 @@ def download(url: str, *, timeout: int, retries: int) -> bytes:
     raise AssertionError("unreachable")
 
 
+def background_color(image: Image.Image) -> str:
+    """Most common #RGB color in the outer 5% band, counting each pixel once."""
+    width, height = image.size
+    # A band rather than a single row avoids thin frames dominating the result.
+    band = max(1, min(width, height) // 20)
+    bottom = max(band, height - band)
+    edges = [(0, 0, width, band)]
+    if bottom < height:
+        edges.append((0, bottom, width, height))
+    if bottom > band:
+        edges.append((0, band, band, bottom))
+        right = max(band, width - band)
+        if right < width:
+            edges.append((right, band, width, bottom))
+
+    colors = collections.Counter()
+    for box in edges:
+        for pixel in image.crop(box).convert("RGB").getdata():
+            # Quantize before counting so near-identical JPEG colors vote together.
+            color = ''.join(f'{(channel + 8) // 17:X}' for channel in pixel)
+            colors[color] += 1
+    return colors.most_common(1)[0][0]
+
+
 def gallery_entries(entries: list[dict]) -> list[dict]:
     """Keep source order: sheet assignment is implicit in this exact index order."""
     if not isinstance(entries, list):
@@ -96,15 +121,20 @@ def gallery_entries(entries: list[dict]) -> list[dict]:
         seen.add(name)
         if any(type(entry.get(key)) is not int or entry[key] <= 0 for key in ("w", "h")):
             raise ValueError(f"invalid image dimensions: {name}")
-        result.append({"name": name, "w": entry["w"], "h": entry["h"]})
+        item = {"name": name, "w": entry["w"], "h": entry["h"]}
+        if "bg" in entry:
+            if not isinstance(entry["bg"], str) or not re.fullmatch(r"[0-9A-Fa-f]{3}", entry["bg"]):
+                raise ValueError(f"invalid background color: {name}")
+            item["bg"] = entry["bg"].upper()
+        result.append(item)
     return result
 
 
-def make_tile(source) -> Image.Image:
+def make_tile(source, bg: str = "000") -> Image.Image:
     with Image.open(source) as original:
         image = ImageOps.exif_transpose(original).convert("RGB")
         image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), Image.Resampling.LANCZOS)
-        tile = Image.new("RGB", (THUMBNAIL_SIZE, THUMBNAIL_SIZE), "black")
+        tile = Image.new("RGB", (THUMBNAIL_SIZE, THUMBNAIL_SIZE), f"#{bg}")
         tile.paste(image, ((THUMBNAIL_SIZE - image.width) // 2, (THUMBNAIL_SIZE - image.height) // 2))
         return tile
 
@@ -146,7 +176,7 @@ def generate_month(entries: list[dict], output_dir: pl.Path, open_image, *, work
 
     def load_tile(entry):
         try:
-            return make_tile(open_image(entry["name"]))
+            return make_tile(open_image(entry["name"]), entry.get("bg", "000"))
         except Exception as exc:
             raise RuntimeError(f"could not generate thumbnail for {entry['name']}: {exc}") from exc
 

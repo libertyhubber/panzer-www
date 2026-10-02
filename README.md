@@ -70,8 +70,34 @@ quality enhancement comes from subsequently loading the original images.
 Sheet names and offsets are derived from the entry's position in the local
 `entry_index.json`: entries 0–19 use sheet 00, 20–39 use sheet 01, etc. No sheet
 filename or coordinates need to be stored per entry. The index preserves archive
-order and contains only image names and original dimensions. The gallery displays
-220 px tiles and loads **local sprites/indexes** as quick previews for unfiltered
+order and contains image names, original dimensions and an optional `bg` background
+color (three uppercase hexadecimal digits without `#`, e.g. `000` or `FFF`). During
+ingestion, pixels in the outer band (5% of the shorter dimension, at least one pixel)
+are rounded to the nearest three-digit RGB color, then the most common color is
+selected. Each pixel counts once and ties use the first encountered color. Sampling
+a band prevents thin decorative frames from dominating the background selection.
+Square or nearly square images omit `bg` when
+`abs(w - h) / max(w, h) < 0.05`; exactly 5% still receives a color. Ingestion removes
+obsolete `bg` values from near-square entries and reuses their saved dimensions
+without reopening originals. Other archive entries missing `bg` are backfilled on
+the next ingest; saved colors are reused. Sprite padding and original-image tiles
+use this color, falling back to black for indexes without `bg`.
+To refresh cached colors and sprites without any classification/API calls, run from
+this repository (repeat for other archive checkouts as needed):
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+from scripts.ingest_uploads import update_indexes
+from scripts.generate_thumbnails import update_thumbnails
+
+archive = Path('../panzer-archiv-02')
+update_indexes(archive, refresh_backgrounds=True)
+update_thumbnails(archive)
+PY
+```
+
+The gallery displays 220 px tiles and loads **local sprites/indexes** as quick previews for unfiltered
 browsing. After each visible sheet has loaded, decoded and had a chance to paint,
 archive originals are loaded lazily for that bounded window, with low request
 priority and at most **four concurrent upgrades**. Each original replaces its
@@ -722,11 +748,36 @@ text/description index is requested last. Tag and template filtering work before
 it arrives; OCR/description search and thumbnail descriptions become available
 when it finishes. The search placeholder/status indicate loading or unavailable
 full-text data, without preventing tag search or image browsing.
-Tags and meme templates appear below the Telegram metadata in at most three lines.
+At viewport widths up to 600px, the filter form uses two control rows: reactions
+and template side by side, then full-width search. Controls have fixed heights,
+and the template wrapper has an explicit width before options load, preventing
+classification data and changing placeholders from reflowing the form. An empty
+status is hidden; active filter/status messages appear below the controls.
+
+JavaScript positions 220px × 290px gallery cards in 228–240px wide column slots
+and 305px rows, without CSS card margins, padding, or background colors. Column counts use the minimum
+8px horizontal gap; spare width increases that gap up to 20px without sacrificing
+columns. Cards are centered horizontally within each slot, and any remaining width
+centers the grid. Vertical gaps are 15px. The maximum container width allows six
+columns with 20px horizontal gaps.
+Below 456px gallery width, two columns use whole-pixel thumbnail widths, a 7px
+gap, and at least 4px outer gutters. At 375px, thumbnails and cards are 180px wide;
+remaining space after rounding is centered. Below 320px, the gallery falls back
+to one column. Card heights decrease by the same amount as the thumbnail width,
+leaving the metadata area unscaled: 180px thumbnails use 250px cards and 265px rows.
+The 15px vertical gap remains fixed. Gallery height, row positioning, and viewport
+rendering all use the responsive row height. Existing 220px sprite sheets
+are scaled only in the browser: background widths and tile offsets use the same
+scale, with automatic height for partial sheets. Sprite generation is unchanged;
+originals still use `contain`. Metadata text is never scaled and uses 24px lines,
+while tags retain 18px lines and transparent backgrounds. Cards have 5px rounded corners and clip
+overflowing content; wrapped metadata can leave less room for the lower tags.
+Tags and meme templates appear below the Telegram metadata in a 39px section,
+with at most two lines of tags.
 Only whole tags that fit are shown. Tags that do not fit are removed from the
 layout, and later shorter tags are still tried in the remaining space. An inline
 `+N` button appears after the visible tags when any do not fit, showing the number
-of omitted items and reserving its own space within the same three lines. Clicking
+of omitted items and reserving its own space within the same two lines. Clicking
 it opens all tags and the full template name in a floating overlay beside the
 pointer, with its top aligned to the tag group and no gallery layout shifts.
 Keyboard activation anchors the overlay horizontally to the button. The overlay
@@ -737,8 +788,12 @@ also dismiss it. The image metadata debug button is disabled by default; add
 `debug=1` to the query string to enable it on any host. Tag frequencies are counted once after loading,
 case-insensitively and once per classified image across the entire catalog.
 Thumbnail tags are ordered most-common-first (alphabetically on ties). All tags,
-including those used in only one image, are eligible for display; only available
-space limits which are shown. Descriptions provide thumbnail tooltips and
+including those used in only one image, are eligible for display. A conservative
+JavaScript vocabulary heuristic makes clearly English tags overlay-only, counting
+them in `+N` even when there is no spatial overflow. It needs no reclassification
+or language service; ambiguous/shared vocabulary stays eligible for inline display.
+Templates are not language-filtered. All tags remain in the overlay and searchable,
+and available space limits which other tags are shown. Descriptions provide thumbnail tooltips and
 accessible labels. Images without results are marked “Not classified”; missing
 metadata does not prevent browsing production-hosted images. Search matches OCR,
 descriptions, template names and tags case-insensitively; tag suggestions are not
