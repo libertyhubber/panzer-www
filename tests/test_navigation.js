@@ -173,6 +173,8 @@ test('generated main page includes approved navigation and retains the gallery',
     assert.match(html, /id="gallery"/)
     assert.match(html, /PhotoSwipeLightbox/)
     assert.equal([...html.matchAll(/class="site-nav-social"/g)].length, 6)
+    assert.match(html, /href="https:\/\/instagram\.com\/rosarotepanzer2"/)
+    assert.match(html, /<strong>Instagram<\/strong><small>@rosarotepanzer2<\/small>/)
     assert.deepEqual([...html.matchAll(/data-nav-method="([^"]+)"/g)].map(match => match[1]), methods)
     assert.deepEqual([...html.matchAll(/data-nav-copy disabled>([^<]+)</g)].map(match => match[1]),
         ['Link kopieren', 'LNURL kopieren', 'Adresse kopieren', 'Adresse kopieren'])
