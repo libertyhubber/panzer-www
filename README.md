@@ -16,6 +16,32 @@ The server handles concurrent static-file requests and negotiates gzip compressi
 for responses of at least 1 KiB. Restart any existing server to apply this change.
 For realistic loading tests, enable browser network throttling and disable caching.
 
+## Header navigation
+
+The header has separate **Links** and **Spenden** buttons. They open bottom sheets
+on mobile and centered dialogs on desktop. The support dialog includes the GoFundMe
+campaign and PayPal, Lightning, Bitcoin, and Monero, in that order.
+
+Edit `templates/navigation.html` for link targets and content, `assets/navigation.css`
+for appearance, and `assets/navigation.js` for dialog and clipboard behavior. Run
+`uv run --script scripts/gen_html.py index.html` to regenerate the main page without
+an index export. Navigation controls work independently of gallery initialization.
+Escape, the close button, or a backdrop click closes a dialog and restores focus.
+Without JavaScript, the links, donation targets, and QR codes remain visible.
+
+The QR images and SVG overlays reuse `assets/icons.css` unchanged. The existing
+Monero and Bitcoin QR destinations differ from the direct wallet links; this
+existing discrepancy is retained to preserve the original codes. Confirm the
+intended destinations before any address change. Clipboard access requires a
+secure context, such as HTTPS or localhost. An HTTP preview through the WSL IP
+falls back to address selection for manual copy.
+
+Run navigation and gallery regression tests with:
+
+```sh
+node --test tests/test_navigation.js tests/test_gallery_classifications.js
+```
+
 ## Shareable gallery navigation
 
 The address bar records the gallery's active filters and selected lightbox image.

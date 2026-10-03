@@ -1,0 +1,70 @@
+{% set socials = [
+    ('youtube', 'YouTube', 'youtube.com/DerrosarotePanzer', 'https://youtube.com/DerrosarotePanzer'),
+    ('telegram', 'Telegram', 't.me/RosaroterPanzerBackup', 'https://t.me/RosaroterPanzerBackup'),
+    ('tiktok', 'TikTok', '@derrosarotepanzer', 'https://www.tiktok.com/@derrosarotepanzer'),
+    ('instagram', 'Instagram', '@rosarotepanzer', 'https://instagram.com/rosarotepanzer'),
+    ('twitter', 'X / Twitter', '@RosarotePanzer', 'https://x.com/RosarotePanzer'),
+    ('protonmail', 'E-Mail', 'derrosarotepanzer@protonmail.com', 'mailto:derrosarotepanzer@protonmail.com'),
+] %}
+{% set methods = [
+    {'id': 'paypal', 'name': 'PayPal', 'href': 'https://paypal.me/rosarotepanzer', 'action': 'PayPal öffnen', 'copy': 'Link kopieren'},
+    {'id': 'lightning', 'name': 'Lightning', 'href': 'lightning:LNURL1DP68GURN8GHJ7AMPD3KX2AR0VEEKZAR0WD5XJTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHKZ6TJWD5KX6MRV9KHQVFJV3AQXK', 'action': 'Lightning-Wallet öffnen', 'copy': 'LNURL kopieren'},
+    {'id': 'bitcoin', 'name': 'Bitcoin', 'href': 'bitcoin:bc1qtavlxx50eu8djwmlajj6dsch4nrmpmzgrawg5l', 'action': 'Bitcoin-Wallet öffnen', 'copy': 'Adresse kopieren'},
+    {'id': 'monero', 'name': 'Monero', 'href': 'monero:45oesfHwHm3TKcKNosJXxE2J2hBh3GajNU5BcaozvacyiBwsNgygdKqBfVQeD8SmsKNhpe6hSLvbdF1vsDjnJ83kELKBCgJ', 'action': 'Monero-Wallet öffnen', 'copy': 'Adresse kopieren'},
+] %}
+<header class="site-nav-header">
+    <div class="site-nav-header-inner">
+        <a class="site-nav-brand" href="/index.html">
+            <img src="/assets/favicon64.png" alt="" width="40" height="40">
+            <span>DerRosarote<wbr>Panzer<small>Inoffizielles Meme-Archiv</small></span>
+        </a>
+        <div class="site-nav-header-actions">
+            <button class="site-nav-button" type="button" data-nav-open="creator-links" aria-controls="creator-links" aria-expanded="false" aria-haspopup="dialog" disabled>Links</button>
+            <button class="site-nav-button site-nav-primary" type="button" data-nav-open="creator-support" aria-controls="creator-support" aria-expanded="false" aria-haspopup="dialog" disabled>Spenden</button>
+        </div>
+    </div>
+</header>
+<dialog class="site-nav-dialog" id="creator-links" aria-labelledby="creator-links-title">
+    <div class="site-nav-dialog-head">
+        <h2 id="creator-links-title">Hier ist der Panzer</h2>
+        <button class="site-nav-button site-nav-close" type="button" data-nav-close aria-label="Links schließen" autofocus>×</button>
+    </div>
+    <nav class="site-nav-dialog-body site-nav-links" aria-label="Creator-Links">
+{% for icon, name, label, href in socials %}
+        <a class="site-nav-social" href="{{ href }}"{% if href.startswith('https:') %} target="_blank" rel="noopener noreferrer"{% endif %}>
+            <span class="site-nav-social-icon icon {{ icon }}" aria-hidden="true"></span>
+            <span class="site-nav-link-text"><strong>{{ name }}</strong><small>{{ label }}</small></span>
+            <span class="site-nav-arrow" aria-hidden="true">↗</span>
+        </a>
+{% endfor %}
+    </nav>
+</dialog>
+<dialog class="site-nav-dialog" id="creator-support" aria-labelledby="creator-support-title">
+    <div class="site-nav-dialog-head">
+        <h2 id="creator-support-title">Panzer Unterstützen</h2>
+        <button class="site-nav-button site-nav-close" type="button" data-nav-close aria-label="Spenden schließen" autofocus>×</button>
+    </div>
+    <div class="site-nav-dialog-body">
+        <a class="site-nav-button site-nav-payment site-nav-campaign" data-brand="gofundme" href="https://www.gofundme.com/f/wir-mussen-mehr-rothbard-lesen" target="_blank" rel="noopener noreferrer">GoFundMe · Mehr Rothbard lesen <span aria-hidden="true">↗</span></a>
+        <div class="site-nav-method-picker" role="group" aria-label="Spendenmethode">
+{% for method in methods %}
+            <button class="site-nav-button site-nav-payment" type="button" data-nav-method="{{ method.id }}" data-brand="{{ method.id }}" aria-pressed="false" aria-controls="support-{{ method.id }}" disabled>{{ method.name }}</button>
+{% endfor %}
+        </div>
+{% for method in methods %}
+        <section class="site-nav-donation" id="support-{{ method.id }}" data-nav-panel="{{ method.id }}" aria-label="{{ method.name }}">
+            <div class="site-nav-qr icon {{ method.id }}" role="img" aria-label="{{ method.name }}: Spenden-QR-Code"></div>
+            <a class="site-nav-button site-nav-payment site-nav-wallet" data-brand="{{ method.id }}" href="{{ method.href }}"{% if method.id == 'paypal' %} target="_blank" rel="noopener noreferrer"{% endif %}>{{ method.action }}</a>
+            <label class="site-nav-address">Link / Adresse<textarea rows="3" readonly spellcheck="false">{{ method.href if method.id == 'paypal' else method.href.split(':', 1)[1] }}</textarea></label>
+            <button class="site-nav-button site-nav-copy" type="button" data-nav-copy disabled>{{ method['copy'] }}</button>
+            <p class="site-nav-copy-status" role="status" aria-live="polite"></p>
+        </section>
+{% endfor %}
+    </div>
+</dialog>
+<noscript>
+    <style>
+        .site-nav-header-actions, .site-nav-method-picker, .site-nav-close, .site-nav-copy, .site-nav-copy-status { display: none; }
+        .site-nav-dialog:not([open]) { display: block; position: static; margin: 16px auto; max-height: none; }
+    </style>
+</noscript>

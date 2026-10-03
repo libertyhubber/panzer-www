@@ -7,37 +7,134 @@
 
     <link rel="shortcut icon" type="image/png" sizes="64x64" href="assets/favicon64.png?cb=1">
 
-    <link rel="stylesheet" href="/assets/style.css?cb=42" />
+    <link rel="stylesheet" href="/assets/style.css?cb=43" />
+    <link rel="stylesheet" href="/assets/icons.css?cb=24" />
+    <link rel="stylesheet" href="/assets/navigation.css?cb=1" />
+    <script src="/assets/navigation.js?cb=1" defer></script>
 </head>
 <body>
 
 <div class="container">
 
 
-<div id="top-nav">
-    <a href="/index.html" class="active">MEMES</a>
-    <span class="socials">
-        Links
-        <div class="nav socials">
-            <a class="social icon youtube" target="_blank" href="https://youtube.com/DerrosarotePanzer"><span>youtube.com/<br>&nbsp;&nbsp;DerrosarotePanzer</span></a>
-            <a class="social icon telegram" target="_blank" href="https://t.me/RosaroterPanzerBackup"><span>t.me/Rosaroter<br>&nbsp;&nbsp;PanzerBackup</span></a>
-            <a class="social icon tiktok" target="_blank" href="https://www.tiktok.com/@derrosarotepanzer"><span>tiktok.com/<br>&nbsp;&nbsp;@derrosarotepanzer</span></a>
-            <a class="social icon instagram" target="_blank" href="https://instagram.com/rosarotepanzer"><span>instagram.com/<br>&nbsp;&nbsp;rosarotepanzer</span></a>
-            <a class="social icon twitter" target="_blank" href="https://x.com/RosarotePanzer"><span>x.com/<br>&nbsp;&nbsp;RosarotePanzer</span></a>
-            <a class="social icon protonmail" target="_blank" href="mailto:derrosarotepanzer@protonmail.com"><span>derrosarotepanzer<br>&nbsp;&nbsp;@protonmail.com</span></a>
+
+
+<header class="site-nav-header">
+    <div class="site-nav-header-inner">
+        <a class="site-nav-brand" href="/index.html">
+            <img src="/assets/favicon64.png" alt="" width="40" height="40">
+            <span>DerRosarote<wbr>Panzer<small>Inoffizielles Meme-Archiv</small></span>
+        </a>
+        <div class="site-nav-header-actions">
+            <button class="site-nav-button" type="button" data-nav-open="creator-links" aria-controls="creator-links" aria-expanded="false" aria-haspopup="dialog" disabled>Links</button>
+            <button class="site-nav-button site-nav-primary" type="button" data-nav-open="creator-support" aria-controls="creator-support" aria-expanded="false" aria-haspopup="dialog" disabled>Spenden</button>
         </div>
-    </span>
-    <span class="support">
-        Spenden
-        <div class="nav supports">
-            <a class="support icon paypal" href="https://paypal.me/rosarotepanzer"></a>
-            <a class="support icon lightning" href="lightning:LNURL1DP68GURN8GHJ7AMPD3KX2AR0VEEKZAR0WD5XJTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHKZ6TJWD5KX6MRV9KHQVFJV3AQXK"></a>
-            <a class="support icon monero" href="monero:45oesfHwHm3TKcKNosJXxE2J2hBh3GajNU5BcaozvacyiBwsNgygdKqBfVQeD8SmsKNhpe6hSLvbdF1vsDjnJ83kELKBCgJ"></a>
-            <a class="support icon bitcoin" href="bitcoin:bc1qtavlxx50eu8djwmlajj6dsch4nrmpmzgrawg5l"></a>
+    </div>
+</header>
+<dialog class="site-nav-dialog" id="creator-links" aria-labelledby="creator-links-title">
+    <div class="site-nav-dialog-head">
+        <h2 id="creator-links-title">Hier ist der Panzer</h2>
+        <button class="site-nav-button site-nav-close" type="button" data-nav-close aria-label="Links schließen" autofocus>×</button>
+    </div>
+    <nav class="site-nav-dialog-body site-nav-links" aria-label="Creator-Links">
+
+        <a class="site-nav-social" href="https://youtube.com/DerrosarotePanzer" target="_blank" rel="noopener noreferrer">
+            <span class="site-nav-social-icon icon youtube" aria-hidden="true"></span>
+            <span class="site-nav-link-text"><strong>YouTube</strong><small>youtube.com/DerrosarotePanzer</small></span>
+            <span class="site-nav-arrow" aria-hidden="true">↗</span>
+        </a>
+
+        <a class="site-nav-social" href="https://t.me/RosaroterPanzerBackup" target="_blank" rel="noopener noreferrer">
+            <span class="site-nav-social-icon icon telegram" aria-hidden="true"></span>
+            <span class="site-nav-link-text"><strong>Telegram</strong><small>t.me/RosaroterPanzerBackup</small></span>
+            <span class="site-nav-arrow" aria-hidden="true">↗</span>
+        </a>
+
+        <a class="site-nav-social" href="https://www.tiktok.com/@derrosarotepanzer" target="_blank" rel="noopener noreferrer">
+            <span class="site-nav-social-icon icon tiktok" aria-hidden="true"></span>
+            <span class="site-nav-link-text"><strong>TikTok</strong><small>@derrosarotepanzer</small></span>
+            <span class="site-nav-arrow" aria-hidden="true">↗</span>
+        </a>
+
+        <a class="site-nav-social" href="https://instagram.com/rosarotepanzer" target="_blank" rel="noopener noreferrer">
+            <span class="site-nav-social-icon icon instagram" aria-hidden="true"></span>
+            <span class="site-nav-link-text"><strong>Instagram</strong><small>@rosarotepanzer</small></span>
+            <span class="site-nav-arrow" aria-hidden="true">↗</span>
+        </a>
+
+        <a class="site-nav-social" href="https://x.com/RosarotePanzer" target="_blank" rel="noopener noreferrer">
+            <span class="site-nav-social-icon icon twitter" aria-hidden="true"></span>
+            <span class="site-nav-link-text"><strong>X / Twitter</strong><small>@RosarotePanzer</small></span>
+            <span class="site-nav-arrow" aria-hidden="true">↗</span>
+        </a>
+
+        <a class="site-nav-social" href="mailto:derrosarotepanzer@protonmail.com">
+            <span class="site-nav-social-icon icon protonmail" aria-hidden="true"></span>
+            <span class="site-nav-link-text"><strong>E-Mail</strong><small>derrosarotepanzer@protonmail.com</small></span>
+            <span class="site-nav-arrow" aria-hidden="true">↗</span>
+        </a>
+
+    </nav>
+</dialog>
+<dialog class="site-nav-dialog" id="creator-support" aria-labelledby="creator-support-title">
+    <div class="site-nav-dialog-head">
+        <h2 id="creator-support-title">Panzer Unterstützen</h2>
+        <button class="site-nav-button site-nav-close" type="button" data-nav-close aria-label="Spenden schließen" autofocus>×</button>
+    </div>
+    <div class="site-nav-dialog-body">
+        <a class="site-nav-button site-nav-payment site-nav-campaign" data-brand="gofundme" href="https://www.gofundme.com/f/wir-mussen-mehr-rothbard-lesen" target="_blank" rel="noopener noreferrer">GoFundMe · Mehr Rothbard lesen <span aria-hidden="true">↗</span></a>
+        <div class="site-nav-method-picker" role="group" aria-label="Spendenmethode">
+
+            <button class="site-nav-button site-nav-payment" type="button" data-nav-method="paypal" data-brand="paypal" aria-pressed="false" aria-controls="support-paypal" disabled>PayPal</button>
+
+            <button class="site-nav-button site-nav-payment" type="button" data-nav-method="lightning" data-brand="lightning" aria-pressed="false" aria-controls="support-lightning" disabled>Lightning</button>
+
+            <button class="site-nav-button site-nav-payment" type="button" data-nav-method="bitcoin" data-brand="bitcoin" aria-pressed="false" aria-controls="support-bitcoin" disabled>Bitcoin</button>
+
+            <button class="site-nav-button site-nav-payment" type="button" data-nav-method="monero" data-brand="monero" aria-pressed="false" aria-controls="support-monero" disabled>Monero</button>
+
         </div>
-    </span>
-    <!-- <a href="/media.html">MEDIEN</a> -->
-</div>
+
+        <section class="site-nav-donation" id="support-paypal" data-nav-panel="paypal" aria-label="PayPal">
+            <div class="site-nav-qr icon paypal" role="img" aria-label="PayPal: Spenden-QR-Code"></div>
+            <a class="site-nav-button site-nav-payment site-nav-wallet" data-brand="paypal" href="https://paypal.me/rosarotepanzer" target="_blank" rel="noopener noreferrer">PayPal öffnen</a>
+            <label class="site-nav-address">Link / Adresse<textarea rows="3" readonly spellcheck="false">https://paypal.me/rosarotepanzer</textarea></label>
+            <button class="site-nav-button site-nav-copy" type="button" data-nav-copy disabled>Link kopieren</button>
+            <p class="site-nav-copy-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="site-nav-donation" id="support-lightning" data-nav-panel="lightning" aria-label="Lightning">
+            <div class="site-nav-qr icon lightning" role="img" aria-label="Lightning: Spenden-QR-Code"></div>
+            <a class="site-nav-button site-nav-payment site-nav-wallet" data-brand="lightning" href="lightning:LNURL1DP68GURN8GHJ7AMPD3KX2AR0VEEKZAR0WD5XJTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHKZ6TJWD5KX6MRV9KHQVFJV3AQXK">Lightning-Wallet öffnen</a>
+            <label class="site-nav-address">Link / Adresse<textarea rows="3" readonly spellcheck="false">LNURL1DP68GURN8GHJ7AMPD3KX2AR0VEEKZAR0WD5XJTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHKZ6TJWD5KX6MRV9KHQVFJV3AQXK</textarea></label>
+            <button class="site-nav-button site-nav-copy" type="button" data-nav-copy disabled>LNURL kopieren</button>
+            <p class="site-nav-copy-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="site-nav-donation" id="support-bitcoin" data-nav-panel="bitcoin" aria-label="Bitcoin">
+            <div class="site-nav-qr icon bitcoin" role="img" aria-label="Bitcoin: Spenden-QR-Code"></div>
+            <a class="site-nav-button site-nav-payment site-nav-wallet" data-brand="bitcoin" href="bitcoin:bc1qtavlxx50eu8djwmlajj6dsch4nrmpmzgrawg5l">Bitcoin-Wallet öffnen</a>
+            <label class="site-nav-address">Link / Adresse<textarea rows="3" readonly spellcheck="false">bc1qtavlxx50eu8djwmlajj6dsch4nrmpmzgrawg5l</textarea></label>
+            <button class="site-nav-button site-nav-copy" type="button" data-nav-copy disabled>Adresse kopieren</button>
+            <p class="site-nav-copy-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="site-nav-donation" id="support-monero" data-nav-panel="monero" aria-label="Monero">
+            <div class="site-nav-qr icon monero" role="img" aria-label="Monero: Spenden-QR-Code"></div>
+            <a class="site-nav-button site-nav-payment site-nav-wallet" data-brand="monero" href="monero:45oesfHwHm3TKcKNosJXxE2J2hBh3GajNU5BcaozvacyiBwsNgygdKqBfVQeD8SmsKNhpe6hSLvbdF1vsDjnJ83kELKBCgJ">Monero-Wallet öffnen</a>
+            <label class="site-nav-address">Link / Adresse<textarea rows="3" readonly spellcheck="false">45oesfHwHm3TKcKNosJXxE2J2hBh3GajNU5BcaozvacyiBwsNgygdKqBfVQeD8SmsKNhpe6hSLvbdF1vsDjnJ83kELKBCgJ</textarea></label>
+            <button class="site-nav-button site-nav-copy" type="button" data-nav-copy disabled>Adresse kopieren</button>
+            <p class="site-nav-copy-status" role="status" aria-live="polite"></p>
+        </section>
+
+    </div>
+</dialog>
+<noscript>
+    <style>
+        .site-nav-header-actions, .site-nav-method-picker, .site-nav-close, .site-nav-copy, .site-nav-copy-status { display: none; }
+        .site-nav-dialog:not([open]) { display: block; position: static; margin: 16px auto; max-height: none; }
+    </style>
+</noscript>
 
 
 
@@ -66,6 +163,7 @@
 <div class="footer">
    Mit 💛 von einem anonymen Unterstützer erstellt. <br>
    Einige Bilder von <a class="mobilelink" target="_blank" href="http://icons8.com/">icons8.com</a>.
+</div>
 </div>
 
 
@@ -108,7 +206,7 @@ window.fetchJson = fetchJson;
 
 const appNode = document.createElement("script")
 appNode.setAttribute("type", "text/javascript")
-appNode.setAttribute("src", "/assets/app.js?cb=46")
+appNode.setAttribute("src", "/assets/app.js?cb=47")
 document.body.appendChild(appNode)
 
 appNode.addEventListener("load", function(){
@@ -137,6 +235,5 @@ window.IMG_HOSTS = {
 <link rel="modulepreload" href="/assets/photoswipe.esm.js">
 
 
-<link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'" href="/assets/icons.css?cb=24" />
 </body>
 </html>

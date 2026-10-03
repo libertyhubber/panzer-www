@@ -1126,31 +1126,6 @@ function galleryClickHandler(evt) {
     return false
 }
 
-function navClickHandler(evt) {
-    if (!evt.target.nodeName == 'SPAN') {return}
-    if (evt.target.classList.contains('socials')) {
-        if (evt.target.classList.contains('active')) {
-            evt.target.classList.remove('active')
-        } else {
-            evt.target.classList.add('active')
-        }
-    } else {
-        const node = document.querySelector(".socials.active")
-        node && node.classList.remove('active')
-    }
-    if (evt.target.classList.contains('support')) {
-        if (evt.target.classList.contains('active')) {
-            evt.target.classList.remove('active')
-        } else {
-            evt.target.classList.add('active')
-        }
-    } else {
-        const node = document.querySelector(".support.active")
-        node && node.classList.remove('active')
-    }
-    return false
-}
-
 function initHandlers() {
     history.scrollRestoration = 'manual'
     window.addEventListener('popstate', () => { restoreNavigation(readNavigation()) })
@@ -1167,7 +1142,6 @@ function initHandlers() {
     window.addEventListener('scroll', updateGalleryHandler)
     window.addEventListener('resize', updateGalleryHandler)
     window.addEventListener('click', galleryClickHandler)
-    window.addEventListener('click', navClickHandler)
     window.addEventListener('keydown', event => {
         if (event.key === 'Escape' && tagOverlay) {
             event.preventDefault()

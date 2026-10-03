@@ -1,0 +1,73 @@
+/* Scope navigation styles to keep gallery controls and PhotoSwipe unchanged. */
+.site-nav-header,
+.site-nav-dialog {
+    --nav-panel: #171717;
+    --nav-line: #343434;
+    --nav-pink: #ffaae1;
+    color: #f6f6f6;
+    font: 16px/1.5 system-ui, sans-serif;
+}
+body.site-nav-modal-open { overflow: hidden; }
+.site-nav-header { border-bottom: 1px solid var(--nav-line); margin-bottom: 24px; }
+.site-nav-header-inner { max-width: 1200px; margin: auto; min-height: 80px; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.site-nav-brand { display: flex; align-items: center; gap: 12px; font-weight: 750; line-height: 1.15; text-decoration: none; }
+.site-nav-brand img { flex-shrink: 0; width: 40px; height: 40px; }
+.site-nav-brand small { display: block; color: var(--nav-pink); font-size: 12px; margin-top: 5px; font-weight: 500; }
+.site-nav-header-actions { display: flex; gap: 8px; }
+.site-nav-button { min-height: 44px; border: 1px solid var(--nav-line); border-radius: 10px; background: #222; color: inherit; padding: 10px 16px; font: inherit; font-weight: 650; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+.site-nav-button:hover { background: #303030; }
+.site-nav-button:disabled { cursor: default; opacity: .5; }
+.site-nav-primary { background: var(--nav-pink); border-color: var(--nav-pink); color: #20131c; }
+.site-nav-primary:hover { background: #ffc4eb; }
+.site-nav-header :focus-visible,
+.site-nav-dialog :focus-visible { outline: 3px solid var(--nav-pink); outline-offset: 4px; }
+.site-nav-dialog { background: var(--nav-panel); border: 1px solid var(--nav-line); padding: 0; width: min(480px, calc(100% - 32px)); max-width: 100%; max-height: calc(100dvh - 32px); margin: auto; border-radius: 16px; overflow-y: auto; }
+.site-nav-dialog::backdrop { background: rgb(0 0 0 / .7); }
+.site-nav-dialog-head { position: sticky; top: 0; z-index: 1; background: var(--nav-panel); display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--nav-line); }
+.site-nav-dialog-head h2 { font-size: 22px; line-height: 1.5; }
+.site-nav-close { flex-shrink: 0; width: 44px; padding: 8px; font-size: 24px; font-weight: 400; }
+.site-nav-dialog-body { padding: 24px; }
+.site-nav-links { display: grid; gap: 6px; }
+.site-nav-social { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px 12px; border: 1px solid #303030; border-radius: 10px; text-decoration: none; min-width: 0; }
+.site-nav-social:hover { background: #252525; border-color: #765268; }
+.site-nav-social-icon::before { content: ''; display: block; width: 24px; height: 24px; background-size: contain; background-position: center; background-repeat: no-repeat; filter: invert(1); }
+.site-nav-link-text { min-width: 0; flex: 1; }
+.site-nav-link-text strong { display: block; font-size: 14px; }
+.site-nav-link-text small { display: block; color: #aaa; font-size: 12px; overflow-wrap: anywhere; }
+.site-nav-arrow { color: var(--nav-pink); }
+.site-nav-method-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.site-nav-method-picker button { padding: 10px 6px; font-size: 13px; font-weight: 600; }
+.site-nav-method-picker button[aria-pressed="true"] { box-shadow: inset 0 0 0 2px currentColor; }
+.site-nav-payment[data-brand="paypal"] { --nav-brand: #0070ba; --nav-brand-ink: #fff; }
+.site-nav-payment[data-brand="bitcoin"] { --nav-brand: #f7931a; --nav-brand-ink: #151515; }
+.site-nav-payment[data-brand="monero"] { --nav-brand: #ff6600; --nav-brand-ink: #151515; }
+.site-nav-payment[data-brand="lightning"] { --nav-brand: #f8c32e; --nav-brand-ink: #151515; }
+.site-nav-payment[data-brand="gofundme"] { --nav-brand: #007c43; --nav-brand-ink: #fff; }
+.site-nav-payment { background: var(--nav-brand); border-color: var(--nav-brand); color: var(--nav-brand-ink); }
+.site-nav-payment:hover { background: var(--nav-brand); filter: brightness(1.12); }
+.site-nav-campaign { width: 100%; margin-bottom: 20px; text-align: center; }
+.site-nav-donation { display: grid; justify-items: center; gap: 14px; margin-top: 20px; }
+.site-nav-donation[hidden] { display: none; }
+/* Reuse both the unchanged QR images and SVG overlays from icons.css. */
+.site-nav-qr { position: relative; width: 208px; height: 208px; }
+.site-nav-qr::before { content: ''; display: block; width: 100%; height: 100%; border: 12px solid white; background-color: white; background-position: center; background-repeat: no-repeat; background-size: 100%; image-rendering: pixelated; }
+.site-nav-qr::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: calc(208px * 30 / 140); height: calc(208px * 30 / 140); background-position: center; background-repeat: no-repeat; background-size: 100%; background-color: #FAE; border-radius: 50%; }
+.site-nav-qr.paypal::after { background-color: transparent; }
+.site-nav-wallet, .site-nav-copy { width: 100%; }
+.site-nav-address { width: 100%; font-size: 12px; color: #aaa; }
+.site-nav-address textarea { display: block; width: 100%; margin-top: 6px; padding: 10px; resize: none; background: #101010; border: 1px solid var(--nav-line); border-radius: 8px; color: #ccc; font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+.site-nav-copy-status { min-height: 21px; color: #aaa; font-size: 12px; text-align: center; }
+@media (max-width: 640px) {
+    .site-nav-header-inner { padding: 12px 16px; min-height: 72px; gap: 8px; }
+    .site-nav-brand { gap: 8px; font-size: 14px; max-width: 130px; }
+    .site-nav-brand img { display: none; }
+    .site-nav-brand small { font-size: 11px; }
+    .site-nav-header-actions button { padding: 10px 12px; }
+    .site-nav-dialog-head { padding: 16px; }
+    .site-nav-dialog-body { padding: 20px 16px; }
+    .site-nav-dialog { position: fixed; inset: auto 0 0; margin: 0; width: 100%; max-height: calc(100dvh - 16px); border-radius: 20px 20px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); }
+}
+@media (prefers-reduced-motion: no-preference) {
+    .site-nav-dialog[open] { animation: site-nav-appear .16s ease-out; }
+    @keyframes site-nav-appear { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+}
