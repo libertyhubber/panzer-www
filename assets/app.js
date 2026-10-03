@@ -20,6 +20,9 @@ const ORIGINAL_LOAD_LIMIT = 4
 const GALLERY_IMAGES = new Map()
 let upgradeCandidates = []
 let activeOriginalLoads = 0
+let galleryScrolling = false
+let galleryFramePending = false
+let galleryRenderVersion = 0
 
 const GALLERY_STATE = {
     'webpSupported': false,
@@ -123,6 +126,9 @@ async function restoreNavigation(navigation) {
     restoringNavigation = true
     clearTimeout(GALLERY_STATE.searchDebounceTimeout)
     clearTimeout(GALLERY_STATE.debounceTimeout)
+    galleryScrolling = false
+    galleryRenderVersion += 1
+    upgradeCandidates = []
     closeTagOverlay()
     const lightboxClosed = cancelLightbox()
     selectedImageId = navigation.image
@@ -469,6 +475,8 @@ function usesOriginal(item, filtered) {
 }
 
 function showOriginal(item) {
+    if (galleryScrolling && GALLERY_IMAGES.get(item.src)?.status !== 'loaded') return
+    galleryImage(item.src)
     // Only mutate currently rendered links; async loads may outlive a filter or scroll.
     for (const thumbnail of document.getElementById('gallery').querySelectorAll('.thumbnail')) {
         if (thumbnail.getAttribute('href') !== item.src) continue
@@ -480,6 +488,7 @@ function showOriginal(item) {
 }
 
 function loadOriginals() {
+    if (galleryScrolling) return
     while (activeOriginalLoads < ORIGINAL_LOAD_LIMIT) {
         const item = upgradeCandidates.find(item =>
             !GALLERY_IMAGES.has(item.src) && GALLERY_IMAGES.get(item.thumbSrc)?.painted)
@@ -495,6 +504,11 @@ function loadOriginals() {
 }
 
 function enhanceThumbnails(items, filtered) {
+    if (galleryScrolling) return
+    // Track direct CSS loads too, so cached originals remain visible during scroll.
+    for (const item of items) {
+        if (usesOriginal(item, filtered)) galleryImage(item.src)
+    }
     // Replacing this list drops queued offscreen images; at most four old requests
     // can remain in flight. Loaded originals survive metadata renders and scrolling.
     upgradeCandidates = filtered || !GALLERY_STATE.webpSupported ? [] : items
@@ -687,6 +701,8 @@ function filterChangeHandler() {
     writeNavigation(true)
     if (GALLERY_STATE.allItemsError) GALLERY_STATE.allItemsPromise = null
     GALLERY_STATE.filterVersion += 1
+    galleryScrolling = false
+    galleryRenderVersion += 1
     upgradeCandidates = []
     document.getElementById('gallery').innerHTML = ''
     GALLERY_STATE.filteredItems = null
@@ -697,6 +713,7 @@ function filterChangeHandler() {
 
 async function updateGallery() {
     if (!GALLERY_STATE.dirNames) {return}  // not yet initialized
+    const renderVersion = ++galleryRenderVersion
 
     const galleryNode = document.getElementById("gallery")
 
@@ -760,25 +777,34 @@ async function updateGallery() {
         return
     }
 
-    let ds = filtered ? {
-        dirCursor: scrollEntry,
+    const layout = { tnColumns, rowHeight, marginLeft, columnWidth, spriteScale }
+    const renderState = scrollEntry + ":" + endEntry + ":" + tnColumns + ":" + galleryWidth + ":" + GALLERY_STATE.classificationStatus + ":" + GALLERY_STATE.classificationTextStatus + ":" + GALLERY_STATE.telegramStatus + ":" + version + ":" + galleryScrolling
+    let ds = {
         dirStartIndex: scrollEntry,
-        dataSourceItems: GALLERY_STATE.filteredItems.slice(scrollEntry, endEntry),
-    } : await updateDataSources(scrollEntry)
-    if (version !== GALLERY_STATE.filterVersion) return
-
-    // Render a bounded window, not two entire months worth of sprite downloads.
-    if (!filtered) {
-        const offset = scrollEntry - ds.dirStartIndex
-        ds = {
-            ...ds,
-            dirStartIndex: scrollEntry,
-            dataSourceItems: ds.dataSourceItems.slice(offset, offset + endEntry - scrollEntry),
-        }
+        dataSourceItems: filtered ? GALLERY_STATE.filteredItems.slice(scrollEntry, endEntry)
+            : Array.from({ length: endEntry - scrollEntry }, (_, i) => GALLERY_STATE.dataSource[scrollEntry + i]),
     }
+    if (!filtered && ds.dataSourceItems.some(item => !item)) {
+        // Show geometry immediately, even before an uncached month supplies dates/colors.
+        if (galleryScrolling) renderGalleryItems(ds, layout, filtered, renderState + ':pending')
+        let loaded
+        try {
+            loaded = await updateDataSources(scrollEntry)
+        } catch (error) {
+            console.warn('Could not load gallery month', error)
+            return
+        }
+        // A scroll, resize, filter or newer render can supersede this request.
+        if (renderVersion !== galleryRenderVersion || version !== GALLERY_STATE.filterVersion) return
+        const offset = scrollEntry - loaded.dirStartIndex
+        ds.dataSourceItems = loaded.dataSourceItems.slice(offset, offset + endEntry - scrollEntry)
+    }
+    return renderGalleryItems(ds, layout, filtered, renderState)
+}
 
-    const renderState = scrollEntry + ":" + endEntry + ":" + tnColumns + ":" + galleryWidth + ":" + GALLERY_STATE.classificationStatus + ":" + GALLERY_STATE.classificationTextStatus + ":" + GALLERY_STATE.telegramStatus + ":" + version
-
+function renderGalleryItems(ds, layout, filtered, renderState) {
+    const galleryNode = document.getElementById('gallery')
+    const { tnColumns, rowHeight, marginLeft, columnWidth, spriteScale } = layout
     if (GALLERY_STATE.lastRenderState == renderState) {
         enhanceThumbnails(ds.dataSourceItems, filtered)
         return
@@ -786,30 +812,33 @@ async function updateGallery() {
 
     GALLERY_STATE.lastRenderState = renderState
 
-    var entryRow = 0
-    var entryCol = ds.dirStartIndex % tnColumns
-
-    const dirOffsetTop = Math.round(((ds.dirStartIndex - entryCol) / tnColumns) * rowHeight)
-
     const thumbnailsHTML = []
     const countFormat = new Intl.NumberFormat('de', { notation: 'compact', maximumFractionDigits: 1 })
     const formatCount = count => count === null ? "—" : countFormat.format(count)
 
     for (var i = 0; i < ds.dataSourceItems.length; i++) {
         var item = ds.dataSourceItems[i]
+        const index = ds.dirStartIndex + i
+        const itemStyles = [
+            `top: ${Math.floor(index / tnColumns) * rowHeight}px;`,
+            `left: ${marginLeft + (index % tnColumns) * columnWidth}px;`,
+        ]
+        if (!item) {
+            thumbnailsHTML.push(
+                `<article class="gallery-item" style="${itemStyles.join(' ')}" aria-busy="true">` +
+                `<div class="thumbnail" style="background-color: #222;"></div>` +
+                `<div class="thumbnail-metadata">Datum wird geladen…</div></article>`
+            )
+            continue
+        }
         const classification = GALLERY_STATE.classificationIndex[item.imageId]
         const imageLabel = GALLERY_STATE.classificationTextIndex[item.imageId]?.description || `Bild vom ${item.date || 'unbekannten Datum'} öffnen`
-
-        const offsetTop = dirOffsetTop + (entryRow * rowHeight)
-        const offsetLeft = marginLeft + entryCol * columnWidth
-
-        const itemStyles = [
-            `top: ${offsetTop}px;`,
-            `left: ${offsetLeft}px;`,
-        ]
         // Sprites are previews only: filters, unsupported WebP, failed sheets and
         // already-loaded originals all render archive images directly.
-        const thumbStyles = usesOriginal(item, filtered) ? [
+        const original = usesOriginal(item, filtered)
+        const imageSrc = original ? item.src : item.thumbSrc
+        const displayImage = !galleryScrolling || GALLERY_IMAGES.get(imageSrc)?.status === 'loaded'
+        const thumbStyles = !displayImage ? [] : original ? [
             `background-image: url('${item.src}');`,
             `background-position: center;`,
             `background-size: contain;`,
@@ -848,18 +877,12 @@ async function updateGallery() {
             classificationHTML(classification, item.imageId) +
             `</div></article>`
         )
-
-        entryCol += 1
-        if (entryCol >= tnColumns) {
-            entryRow += 1
-            entryCol = 0
-        }
     }
 
     closeTagOverlay()
     galleryNode.innerHTML = thumbnailsHTML.join("")
-    fitClassificationTags(galleryNode)
-    enhanceThumbnails(ds.dataSourceItems, filtered)
+    if (!galleryScrolling) fitClassificationTags(galleryNode)
+    enhanceThumbnails(ds.dataSourceItems.filter(Boolean), filtered)
     const firstItem = ds.dataSourceItems[0]
     return firstItem && (usesOriginal(firstItem, filtered) ? firstItem.src : firstItem.thumbSrc)
 }
@@ -976,8 +999,22 @@ function updateGalleryHandler(evt) {
     if (!GALLERY_STATE.dirNames) {return}  // not yet initialized
     closeTagOverlay()
     if (evt.type === 'scroll' && !window.lightbox.pswp) writeNavigation()
+    galleryScrolling = true
+    galleryRenderVersion += 1
+    // Stop queued upgrades immediately; old in-flight loads may still complete.
+    upgradeCandidates = []
+    if (!galleryFramePending) {
+        galleryFramePending = true
+        requestAnimationFrame(() => {
+            galleryFramePending = false
+            updateGallery()
+        })
+    }
     clearTimeout(GALLERY_STATE.debounceTimeout)
-    GALLERY_STATE.debounceTimeout = setTimeout(updateGallery, 150)
+    GALLERY_STATE.debounceTimeout = setTimeout(() => {
+        galleryScrolling = false
+        updateGallery()
+    }, 150)
 }
 
 

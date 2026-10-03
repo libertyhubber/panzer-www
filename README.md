@@ -109,8 +109,14 @@ When any filter is active, tiles use archive originals directly instead of spars
 used sprite sheets. Browsers that cannot decode lossy WebP also use originals
 directly. Missing/corrupt sheets fall back to originals. The lightbox always opens
 archive originals. Only viewport rows plus one extra row on each side are rendered
-in either mode. Filtering loads all indexes, but images only for this bounded window. Monthly
-indexes use six independent request slots: each completed or failed request
+in either mode. During scroll, the visible card window updates at most once per
+animation frame. Cards show their indexed background color, date and available
+metadata without starting new image requests; already loaded images remain visible.
+Uncached months first show neutral card shells, then receive dates and colors when
+their indexes arrive. New sprite/original requests and queued quality upgrades
+resume after 150 ms without scroll or resize events. Filtering loads all indexes,
+but images only for this bounded window. Monthly indexes use six independent
+request slots: each completed or failed request
 immediately frees its slot for the next month, without waiting for a neighbor.
 
 The regeneration command reads `images/dir_index.json`, downloads each monthly

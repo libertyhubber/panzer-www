@@ -1411,10 +1411,224 @@ test('derives local sprite filenames and offsets from the original index, not re
 const renderedSprites = ui => new Set([...ui.node.innerHTML.matchAll(/images\/[^']+\/thumbnails-\d+\.webp/g)].map(match => match[0]))
 const thumbnailCount = ui => (ui.node.innerHTML.match(/class="thumbnail"/g) || []).length
 async function updateViewport(ui, event = 'scroll') {
-    ui.listeners[event][0]({ constructor: { name: 'Event' } })
+    ui.listeners[event][0]({ type: event, constructor: { name: 'Event' } })
     await new Promise(resolve => setTimeout(resolve, 180))
     await flush()
 }
+
+// Control only the scroll idle timer; image paint frames still run normally.
+function scrollClock(ui) {
+    const timers = new Map()
+    let nextId = 0
+    ui.context.setTimeout = callback => {
+        const id = ++nextId
+        timers.set(id, callback)
+        return id
+    }
+    ui.context.clearTimeout = id => timers.delete(id)
+    return {
+        scroll(row) {
+            ui.context.document.documentElement.scrollTop = row * 305
+            ui.listeners.scroll[0]({ type: 'scroll' })
+        },
+        async settle() {
+            const callbacks = [...timers.values()]
+            timers.clear()
+            for (const callback of callbacks) callback()
+            await flush()
+        },
+        get pending() { return timers.size },
+    }
+}
+
+test('continuous scroll displays colors and dates without new images until idle', async () => {
+    const entries = manyEntries(200).map(entry => ({ ...entry, bg: 'ABC' }))
+    const ui = gallery(false, [], entries)
+    ui.resolveClassifications({})
+    await flush()
+    const clock = scrollClock(ui)
+    const initialRequests = ui.imageRequests.length
+    const initialIndexRequests = ui.requests.filter(path => path.endsWith('/entry_index.json')).length
+    const oldOriginals = [...originalRequests(ui)]
+    for (const row of [14, 20, 30]) {
+        clock.scroll(row)
+        await flush()
+        assert.match(ui.node.innerHTML, new RegExp(`-data-gallery-idx="${(row - 1) * 2}"`))
+        assert.match(ui.node.innerHTML, /<time datetime="2024-01-/)
+        assert.equal(thumbnailCount(ui), 12)
+        assert.equal(renderedSprites(ui).size, 0)
+        for (const tile of ui.node.querySelectorAll('.thumbnail')) {
+            assert.equal(tile.style.backgroundColor, '#ABC')
+            assert.equal(tile.style.backgroundImage, undefined)
+        }
+        assert.equal(ui.imageRequests.length, initialRequests)
+        assert.equal(clock.pending, 1, 'continuous scroll resets the single idle timer')
+    }
+    assert.equal(ui.requests.filter(path => path.endsWith('/entry_index.json')).length, initialIndexRequests,
+        'cached entry data needs no new fetch or month conversion')
+    for (const image of oldOriginals) image.onload()
+    await flush()
+    assert.equal(ui.imageRequests.length, initialRequests, 'old completions cannot start queued upgrades')
+    await clock.settle()
+    assert.ok(renderedSprites(ui).size > 0, 'unchanged card window receives images at idle')
+    assert.ok(ui.imageRequests.length > initialRequests)
+    assert.equal(originalRequests(ui).length, oldOriginals.length + 4)
+})
+
+test('scroll bursts coalesce into one animation frame for the latest viewport', async () => {
+    const ui = gallery(false, [], manyEntries(200))
+    ui.resolveClassifications({})
+    await flush()
+    const frames = []
+    const animationFrame = ui.context.requestAnimationFrame
+    ui.context.requestAnimationFrame = callback => frames.push(callback)
+    const clock = scrollClock(ui)
+    const initialHTML = ui.node.innerHTML
+    for (const row of [14, 20, 30]) clock.scroll(row)
+    assert.equal(frames.length, 1)
+    assert.equal(ui.node.innerHTML, initialHTML)
+    frames.shift()()
+    await flush()
+    assert.match(ui.node.innerHTML, /-data-gallery-idx="58"/)
+    assert.doesNotMatch(ui.node.innerHTML, /-data-gallery-idx="26"/)
+    ui.context.requestAnimationFrame = animationFrame
+    await clock.settle()
+})
+
+for (const filtered of [false, true]) {
+    test(`loaded ${filtered ? 'filtered originals' : 'previews and originals'} remain visible during scroll`, async () => {
+        const entries = manyEntries(200)
+        const ui = gallery(false, [], entries)
+        ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
+            `2024/01/${entry.name}`, { tags: ['matching'], template: null },
+        ])))
+        await flush()
+        if (filtered) await applyFilters(ui, { 'filter-search': 'matching' })
+        // Complete one image only; the remaining tiles keep their loaded previews.
+        const loaded = originalRequests(ui)[0]
+        loaded.onload()
+        await flush()
+        const clock = scrollClock(ui)
+        const initialRequests = ui.imageRequests.length
+        clock.scroll(0)
+        await flush()
+        const tile = ui.node.querySelectorAll('.thumbnail').find(node => node.getAttribute('href') === loaded.src)
+        assert.equal(tile.style.backgroundImage, `url('${loaded.src}')`)
+        if (!filtered) assert.ok(renderedSprites(ui).size > 0)
+        assert.equal(ui.imageRequests.length, initialRequests)
+        await clock.settle()
+    })
+}
+
+test('filtered scroll defers direct originals, including metadata-triggered renders', async () => {
+    const entries = manyEntries(200).map(entry => ({ ...entry, bg: 'DEF' }))
+    let releaseText
+    const textIndex = new Promise(resolve => { releaseText = resolve })
+    const ui = gallery(false, [], entries, 'localhost', { textIndex })
+    ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
+        `2024/01/${entry.name}`, { tags: ['matching'], template: null },
+    ])))
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'matching' })
+    const clock = scrollClock(ui)
+    const initialRequests = ui.imageRequests.length
+    clock.scroll(20)
+    await flush()
+    releaseText({})
+    await flush()
+    assert.match(ui.node.innerHTML, /-data-gallery-idx="38"/)
+    assert.match(ui.node.innerHTML, /<time datetime="2024-01-/)
+    assert.doesNotMatch(ui.node.innerHTML, /background-image:/)
+    assert.match(ui.node.innerHTML, /background-color: #DEF;/)
+    assert.equal(ui.imageRequests.length, initialRequests)
+    await clock.settle()
+    assert.match(ui.node.innerHTML, /background-image: url\('https:\/\/archive.example/)
+    assert.equal(renderedSprites(ui).size, 0)
+    assert.equal(ui.imageRequests.length, initialRequests + 12)
+})
+
+test('uncached months show immediate shells, then dates/colors without images during scroll', async () => {
+    const entries = manyEntries(200).map(entry => ({ ...entry, bg: 'FED' }))
+    const ui = gallery(false, [], entries, 'localhost', {
+        dirIndex: { '2024/01': 200, '2024/02': 200, '2024/03': 200, '2024/04': 200 },
+    })
+    ui.resolveClassifications({})
+    await flush()
+    const fetchJson = ui.context.fetchJson
+    let release
+    const month = new Promise(resolve => { release = resolve })
+    ui.context.fetchJson = path => path === 'images/2024/02/entry_index.json' ? month : fetchJson(path)
+    const clock = scrollClock(ui)
+    const initialRequests = ui.imageRequests.length
+    clock.scroll(210)
+    await flush()
+    assert.match(ui.node.innerHTML, /aria-busy="true"/)
+    assert.match(ui.node.innerHTML, /Datum wird geladen/)
+    assert.match(ui.node.innerHTML, /top: 63745px;/)
+    assert.equal(thumbnailCount(ui), 12)
+    assert.equal(ui.imageRequests.length, initialRequests)
+    release(entries)
+    await flush()
+    assert.doesNotMatch(ui.node.innerHTML, /aria-busy="true"/)
+    assert.match(ui.node.innerHTML, /-data-gallery-idx="418"/)
+    assert.match(ui.node.innerHTML, /<time datetime="2024-01-/)
+    assert.match(ui.node.innerHTML, /background-color: #FED;/)
+    assert.doesNotMatch(ui.node.innerHTML, /background-image:/)
+    assert.equal(ui.imageRequests.length, initialRequests)
+    await clock.settle()
+    assert.ok(renderedSprites(ui).size > 0)
+})
+
+test('late month responses cannot replace a newer scroll viewport', async () => {
+    const entries = manyEntries(200)
+    const ui = gallery(false, [], entries, 'localhost', {
+        dirIndex: { '2024/01': 200, '2024/02': 200, '2024/03': 200, '2024/04': 200 },
+    })
+    ui.resolveClassifications({})
+    await flush()
+    const fetchJson = ui.context.fetchJson
+    let release
+    const month = new Promise(resolve => { release = resolve })
+    ui.context.fetchJson = path => path === 'images/2024/02/entry_index.json' ? month : fetchJson(path)
+    const clock = scrollClock(ui)
+    const initialRequests = ui.imageRequests.length
+    clock.scroll(210)
+    await flush()
+    clock.scroll(20)
+    await flush()
+    const latest = ui.node.innerHTML
+    release(entries)
+    await flush()
+    assert.equal(ui.node.innerHTML, latest)
+    assert.match(latest, /-data-gallery-idx="38"/)
+    assert.equal(ui.imageRequests.length, initialRequests)
+    await clock.settle()
+})
+
+test('a filter change cancels pending scroll hydration and queued upgrades', async () => {
+    const ui = gallery(false, [], manyEntries(200), 'localhost', {
+        dirIndex: { '2024/01': 200, '2024/02': 200, '2024/03': 200, '2024/04': 200 },
+    })
+    ui.resolveClassifications({})
+    await flush()
+    const fetchJson = ui.context.fetchJson
+    let release
+    const month = new Promise(resolve => { release = resolve })
+    ui.context.fetchJson = path => path === 'images/2024/02/entry_index.json' ? month : fetchJson(path)
+    const clock = scrollClock(ui)
+    const initialRequests = ui.imageRequests.length
+    clock.scroll(210)
+    await flush()
+    ui.controls['filter-reactions'].value = '999'
+    ui.controls['filter-reactions'].handler()
+    await clock.settle()
+    release(manyEntries(200))
+    for (const image of originalRequests(ui)) image.onload()
+    await flush()
+    assert.equal(ui.node.innerHTML, '')
+    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    assert.equal(ui.imageRequests.length, initialRequests)
+})
 
 test('renders viewport rows plus one-row overscan and refreshes within a month', async () => {
     const ui = gallery(false, [], manyEntries(200))
