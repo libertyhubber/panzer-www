@@ -888,7 +888,7 @@ test('tag counter is inline while the overlay stays outside normal document flow
     assert.match(style, /\.tags-overlay-list \.classification-tag \{[^}]*visibility: visible;/)
 })
 
-test('search input waits for 200 ms of inactivity before applying the latest value', async () => {
+test('search input waits for 500 ms of inactivity before applying the latest value', async () => {
     let now = 0, nextId = 0
     const timers = new Map()
     const advance = ms => {
@@ -920,13 +920,13 @@ test('search input waits for 200 ms of inactivity before applying the latest val
     advance(100)
     search.value = 'OCR'
     search.handler()
-    advance(199)
+    advance(499)
     await flush()
     assert.equal(ui.node.innerHTML, initialHTML, 'typing must not clear or filter the gallery')
     assert.equal(ui.controls['filter-status'].textContent, '')
     assert.equal(timers.size, 1, 'each keystroke replaces the pending search callback')
     advance(1)
-    assert.equal(ui.node.innerHTML, '', 'the filter handler runs after exactly 200 ms idle')
+    assert.equal(ui.node.innerHTML, '', 'the filter handler runs after exactly 500 ms idle')
     advance(150)
     await flush()
     assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
@@ -963,7 +963,7 @@ test('search icons reflect the input value immediately, regardless of focus', as
         assert.equal(icon.hidden, value !== '')
         assert.notEqual(search.focused, true)
     }
-    await new Promise(resolve => setTimeout(resolve, 380))
+    await new Promise(resolve => setTimeout(resolve, 680))
 })
 
 test('clear search applies immediately, cancels pending input, and updates icons on history navigation', async () => {
@@ -986,7 +986,7 @@ test('clear search applies immediately, cancels pending input, and updates icons
     assert.equal(icon.hidden, false)
     assert.notEqual(search.focused, true, 'clear must not open the mobile keyboard')
     assert.equal(new URL(ui.context.location.href).searchParams.has('q'), false)
-    await new Promise(resolve => setTimeout(resolve, 380))
+    await new Promise(resolve => setTimeout(resolve, 680))
     await flush()
     assert.equal(ui.controls['filter-status'].textContent, '')
     assert.equal(thumbnailCount(ui), 2)
@@ -1184,7 +1184,7 @@ async function applyFilters(ui, values) {
     for (const [id, value] of Object.entries(values)) ui.controls[id].value = value
     const control = Object.keys(values).at(-1)
     ui.controls[control].handler()
-    await new Promise(resolve => setTimeout(resolve, control === 'filter-search' ? 380 : 180))
+    await new Promise(resolve => setTimeout(resolve, control === 'filter-search' ? 680 : 180))
     await flush()
 }
 

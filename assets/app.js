@@ -690,7 +690,7 @@ function updateSearchControl() {
 function searchInputHandler() {
     updateSearchControl()
     clearTimeout(GALLERY_STATE.searchDebounceTimeout)
-    GALLERY_STATE.searchDebounceTimeout = setTimeout(filterChangeHandler, 200)
+    GALLERY_STATE.searchDebounceTimeout = setTimeout(filterChangeHandler, 500)
 }
 
 function filterChangeHandler() {
