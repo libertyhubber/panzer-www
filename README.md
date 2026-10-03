@@ -112,6 +112,10 @@ archive originals. Only viewport rows plus one extra row on each side are render
 in either mode. During scroll, the visible card window updates at most once per
 animation frame. Cards show their indexed background color, date and available
 metadata without starting new image requests; already loaded images remain visible.
+Cards that remain in the rendered window retain their fitted tags and overflow
+counters during scroll and idle image hydration. Tag previews are refitted only
+when their content or card width changes; newly entered cards receive their first
+fit at idle.
 Uncached months first show neutral card shells, then receive dates and colors when
 their indexes arrive. New sprite/original requests and queued quality upgrades
 resume after 150 ms without scroll or resize events. Filtering loads all indexes,

@@ -12,21 +12,27 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
         resolveClassifications = resolve
         rejectClassifications = reject
     })
-    let html = '', thumbnails = []
+    let html = '', thumbnails = [], classificationNodes = []
+    const classificationPattern = /<div class="thumbnail-classification" data-image-id="([^"]+)"[^>]*>(?:<div class="classification-tags"[^>]*>[\s\S]*?<\/div>)?<\/div>/g
     const thumbnailPattern = /<a href="[^"]*" class="thumbnail" style="[^"]*"[^>]*>/g
     const node = {
         clientWidth: options.clientWidth || 456,
         style: { setProperty(name, value) { this[name] = value } },
         querySelectorAll: selector => selector === '.thumbnail' ? thumbnails
-            : selector === '.classification-tags' ? tagGroups
+            : selector === '.classification-tags' ? options.classificationDOM
+                ? classificationNodes.map(node => node.group).filter(Boolean) : tagGroups
+            : selector === '.thumbnail-classification[data-image-id]' ? classificationNodes
             : selector === '.classification-more' ? options.moreButtons || [] : [],
         get innerHTML() {
             let i = 0
-            return html.replace(thumbnailPattern, anchor => {
+            const result = html.replace(thumbnailPattern, anchor => {
                 const style = Object.entries(thumbnails[i++].style).map(([key, value]) =>
                     `${key.replace(/[A-Z]/g, char => '-' + char.toLowerCase())}: ${value};`).join(' ')
                 return anchor.replace(/style="[^"]*"/, `style="${style}"`)
             })
+            let classificationIndex = 0
+            return options.classificationDOM ? result.replace(classificationPattern,
+                () => classificationNodes[classificationIndex++].outerHTML) : result
         },
         set innerHTML(value) {
             html = value
@@ -40,6 +46,11 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
                 }))
                 return { style, getAttribute: name => attrs[name] }
             })
+            if (options.classificationDOM) {
+                classificationNodes = [...value.matchAll(classificationPattern)].map(([markup, imageId]) =>
+                    classificationElement(markup, imageId, parseFloat(node.style['--thumbnail-display-size']),
+                        options.tagMeasurements))
+            }
         },
     }
     const controls = Object.fromEntries(['filter-reactions', 'filter-template', 'filter-search', 'filter-status',
@@ -202,6 +213,66 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
     vm.runInNewContext(appSource, context)
     return { node, controls, resolveClassifications, rejectClassifications, listeners, lightbox, requests, imageRequests, context,
         get dialog() { return dialog }, get overlay() { return overlay } }
+}
+
+// Model fitted tag markup, including its CSS visibility and accessibility state.
+// Unlike static tagGroups, these elements are recreated on every innerHTML write.
+function classificationElement(markup, imageId, width, measurements = new Map()) {
+    const buttonPattern = /<button\b([^>]*)>([\s\S]*?)<\/button>/g
+    const children = [...markup.matchAll(buttonPattern)].map(([, attributes, textContent]) => {
+        const attrs = Object.fromEntries([...attributes.matchAll(/([-\w]+)="([^"]*)"/g)]
+            .map(([, name, value]) => [name, value]))
+        const button = {
+            attrs, textContent,
+            hidden: /\bhidden(?:\s|=|$)/.test(attributes),
+            disabled: /\bdisabled(?:\s|=|$)/.test(attributes),
+            tabIndex: attrs.tabindex === undefined ? undefined : Number(attrs.tabindex),
+            style: Object.fromEntries((attrs.style || '').split(';').filter(part => part.trim())
+                .map(part => part.trim().split(':').map(value => value.trim()))),
+            get width() { return 8 + this.textContent.length * 6 },
+            getAttribute(name) { return this.attrs[name] },
+            setAttribute(name, value) { this.attrs[name] = value },
+            classList: { contains: name => (attrs.class || '').split(' ').includes(name) },
+            getBoundingClientRect() {
+                let x = 0, y = 0
+                for (const child of children) {
+                    if (child.style.display === 'none' || child.hidden) continue
+                    if (x && x + child.width > width) { x = 0; y += 21 }
+                    if (child === this) return { left: x, right: x + child.width, top: y, bottom: y + 18 }
+                    x += child.width + 3
+                }
+                return { left: 0, right: 0, top: 0, bottom: 0 }
+            },
+            get outerHTML() {
+                const attrs = { ...this.attrs }
+                if (Object.keys(this.style).length) {
+                    attrs.style = Object.entries(this.style).map(([name, value]) => `${name}: ${value};`).join(' ')
+                }
+                if (this.tabIndex !== undefined) attrs.tabindex = this.tabIndex
+                for (const name of ['hidden', 'disabled']) {
+                    if (this[name]) attrs[name] = ''
+                    else delete attrs[name]
+                }
+                return '<button ' + Object.entries(attrs).map(([name, value]) => `${name}="${value}"`).join(' ') +
+                    '>' + this.textContent + '</button>'
+            },
+        }
+        return button
+    })
+    return {
+        getAttribute: name => name === 'data-image-id' ? imageId : null,
+        group: markup.includes('class="classification-tags"') ? {
+            children,
+            getBoundingClientRect() {
+                measurements.set(imageId, (measurements.get(imageId) || 0) + 1)
+                return { top: 0, bottom: 39, left: 0, right: width }
+            },
+        } : null,
+        get outerHTML() {
+            let i = 0
+            return markup.replace(buttonPattern, () => children[i++].outerHTML)
+        },
+    }
 }
 
 test('Telegram request waits for the initial gallery paint, then enriches visible cards', async () => {
@@ -1440,6 +1511,71 @@ function scrollClock(ui) {
         get pending() { return timers.size },
     }
 }
+
+test('overlapping cards preserve fitted tags and counters throughout scroll and idle', async () => {
+    const entries = manyEntries(200)
+    const measurements = new Map()
+    const ui = gallery(false, [], entries, 'localhost', {
+        classificationDOM: true, tagMeasurements: measurements,
+    })
+    const tags = ['Anarchie', 'Freiheit', 'Steuern', 'Widerstand', 'Gesellschaft', 'Staatskritik',
+        'Selbstbestimmung', 'Eigentumsrechte']
+    ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
+        `2024/01/${entry.name}`, { tags, template: null },
+    ])))
+    await flush()
+    const imageId = `2024/01/${entries[193].name}` // Gallery index 6 stays inside every window below.
+    const classification = () => ui.node.querySelectorAll('.thumbnail-classification[data-image-id]')
+        .find(node => node.getAttribute('data-image-id') === imageId)
+    const initial = classification().outerHTML
+    const initialMeasurements = measurements.get(imageId)
+    assert.match(initial, /visibility: visible;/)
+    assert.match(initial, /display: none; visibility: hidden;/)
+    assert.match(initial, /tabindex="-1" disabled=""/)
+    assert.match(initial, /class="classification-more"[^>]*>\+[1-9]/)
+    const clock = scrollClock(ui)
+    const imageRequests = ui.imageRequests.length
+    for (const row of [1, 2, 3]) {
+        clock.scroll(row)
+        await flush()
+        assert.equal(classification().outerHTML, initial, 'visible tags, hidden tags and counter stay unchanged')
+        assert.equal(measurements.get(imageId), initialMeasurements, 'retained cards need no new layout measurements')
+        assert.equal(ui.imageRequests.length, imageRequests)
+    }
+    const enteringId = `2024/01/${entries[187].name}`
+    assert.equal(measurements.get(enteringId), undefined, 'new cards may defer their tag fit until idle')
+    await clock.settle()
+    assert.equal(classification().outerHTML, initial)
+    assert.equal(measurements.get(imageId), initialMeasurements, 'idle image hydration does not repack retained tags')
+    assert.equal(measurements.get(enteringId), 1, 'new cards receive their first fit at idle')
+})
+
+test('fitted tag previews are invalidated by card width or classification changes', async () => {
+    const entries = manyEntries(20)
+    const measurements = new Map()
+    const ui = gallery(false, [], entries, 'localhost', {
+        classificationDOM: true, tagMeasurements: measurements,
+    })
+    const tags = ['Anarchie', 'Freiheit', 'Steuern', 'Widerstand', 'Gesellschaft']
+    ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
+        `2024/01/${entry.name}`, { tags, template: null },
+    ])))
+    await flush()
+    const imageId = `2024/01/${entries[19].name}`
+    const clock = scrollClock(ui)
+    const initialMeasurements = measurements.get(imageId)
+    ui.node.clientWidth = 320
+    ui.listeners.resize[0]({ type: 'resize' })
+    await clock.settle()
+    assert.equal(measurements.get(imageId), initialMeasurements + 1, 'narrow cards must repack their tags')
+    tags.push('Selbstbestimmung')
+    clock.scroll(0)
+    await clock.settle()
+    assert.equal(measurements.get(imageId), initialMeasurements + 2, 'changed tag content must repack too')
+    const classification = ui.node.querySelectorAll('.thumbnail-classification[data-image-id]')
+        .find(node => node.getAttribute('data-image-id') === imageId)
+    assert.match(classification.outerHTML, />Selbstbestimmung<\/button>/)
+})
 
 test('continuous scroll displays colors and dates without new images until idle', async () => {
     const entries = manyEntries(200).map(entry => ({ ...entry, bg: 'ABC' }))

@@ -23,6 +23,7 @@ let activeOriginalLoads = 0
 let galleryScrolling = false
 let galleryFramePending = false
 let galleryRenderVersion = 0
+let fittedClassifications = new Map()
 
 const GALLERY_STATE = {
     'webpSupported': false,
@@ -129,6 +130,7 @@ async function restoreNavigation(navigation) {
     galleryScrolling = false
     galleryRenderVersion += 1
     upgradeCandidates = []
+    fittedClassifications.clear()
     closeTagOverlay()
     const lightboxClosed = cancelLightbox()
     selectedImageId = navigation.image
@@ -397,7 +399,7 @@ function classificationHTML(classification, imageId) {
     const tags = sortedTags
         .map(tag => `<button type="button" class="classification-tag"${overlayOnly(tag) ? ' data-overlay-only="true"' : ''}>${escapeHtml(tag)}</button>`)
         .join('')
-    return `<div class="thumbnail-classification">` +
+    return `<div class="thumbnail-classification" data-image-id="${escapeHtml(imageId)}">` +
         (template || allTags.length ?
             `<div class="classification-tags" role="group" aria-label="Vorlage und Schlagwörter zum Bild">${template}${tags}` +
             `<button type="button" class="classification-more" data-image-id="${escapeHtml(imageId)}" aria-label="Weitere Schlagwörter anzeigen" title="Weitere Schlagwörter anzeigen" aria-haspopup="dialog" aria-expanded="false" hidden>+0</button></div>` : '') +
@@ -704,6 +706,7 @@ function filterChangeHandler() {
     galleryScrolling = false
     galleryRenderVersion += 1
     upgradeCandidates = []
+    fittedClassifications.clear()
     document.getElementById('gallery').innerHTML = ''
     GALLERY_STATE.filteredItems = null
     GALLERY_STATE.lastRenderState = null
@@ -773,6 +776,7 @@ async function updateGallery() {
 
     if (totalEntries === 0) {
         upgradeCandidates = []
+        fittedClassifications.clear()
         galleryNode.innerHTML = ''
         return
     }
@@ -813,6 +817,8 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
     GALLERY_STATE.lastRenderState = renderState
 
     const thumbnailsHTML = []
+    const nextClassifications = new Map()
+    const preservedClassifications = new Set()
     const countFormat = new Intl.NumberFormat('de', { notation: 'compact', maximumFractionDigits: 1 })
     const formatCount = count => count === null ? "—" : countFormat.format(count)
 
@@ -832,6 +838,13 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
             continue
         }
         const classification = GALLERY_STATE.classificationIndex[item.imageId]
+        const classificationSource = classificationHTML(classification, item.imageId)
+        const previous = fittedClassifications.get(item.imageId)
+        // Keep the fitted buttons and overflow counter unchanged for overlapping cards.
+        const preserve = previous?.html && previous.source === classificationSource && previous.scale === spriteScale
+        const preview = preserve ? previous : { source: classificationSource, scale: spriteScale, html: null }
+        nextClassifications.set(item.imageId, preview)
+        if (preserve) preservedClassifications.add(item.imageId)
         const imageLabel = GALLERY_STATE.classificationTextIndex[item.imageId]?.description || `Bild vom ${item.date || 'unbekannten Datum'} öffnen`
         // Sprites are previews only: filters, unsupported WebP, failed sheets and
         // already-loaded originals all render archive images directly.
@@ -874,14 +887,22 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
             (item.comments === null ? '' : `<span title="Telegram-Kommentare" aria-label="${item.comments} Kommentare">💬 ${formatCount(item.comments)}</span>`) +
             `</div>${telegramLink}` +
             (DEBUG_ENABLED ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${item.galleryIndex}" aria-haspopup="dialog">debug</button>` : '') +
-            classificationHTML(classification, item.imageId) +
+            (preview.html || classificationSource) +
             `</div></article>`
         )
     }
 
     closeTagOverlay()
     galleryNode.innerHTML = thumbnailsHTML.join("")
-    if (!galleryScrolling) fitClassificationTags(galleryNode)
+    if (!galleryScrolling) {
+        fitClassificationTags(galleryNode, preservedClassifications)
+        for (const node of galleryNode.querySelectorAll('.thumbnail-classification[data-image-id]')) {
+            const preview = nextClassifications.get(node.getAttribute('data-image-id'))
+            if (preview) preview.html = node.outerHTML
+        }
+    }
+    // Retain only the current window, not every card visited in the archive.
+    fittedClassifications = nextClassifications
     enhanceThumbnails(ds.dataSourceItems.filter(Boolean), filtered)
     const firstItem = ds.dataSourceItems[0]
     return firstItem && (usesOriginal(firstItem, filtered) ? firstItem.src : firstItem.thumbSrc)
@@ -889,10 +910,11 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
 
 // Greedily try every tag. Rejected tags leave the flex flow so later, shorter
 // tags can use the remaining space instead of being pushed into invisible rows.
-function fitClassificationTags(galleryNode) {
+function fitClassificationTags(galleryNode, preservedClassifications = new Set()) {
     for (const group of galleryNode.querySelectorAll('.classification-tags')) {
         const children = Array.from(group.children)
         const more = children.find(child => child.classList?.contains('classification-more'))
+        if (preservedClassifications.has(more?.getAttribute('data-image-id'))) continue
         const tags = children.filter(child => child !== more)
         const bounds = group.getBoundingClientRect()
         const fitsBounds = rect => rect.bottom <= bounds.bottom + 0.5 &&
