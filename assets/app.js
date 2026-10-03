@@ -645,29 +645,38 @@ function normalizeSearch(value) {
         .replace(/[äöü]/g, char => ({ ä: 'a', ö: 'o', ü: 'u' })[char])
 }
 
-function matchesSearch(value, search) {
-    const text = normalizeSearch(value)
-    if (text.includes(search)) return true
+function compileSearch(query) {
+    // Double quotes group a phrase; an unfinished quote extends to the end of input.
+    const clauses = [...normalizeSearch(query).matchAll(/"([^"]*)(?:"|$)|([^\s"]+)/gu)]
+        .map(match => (match[1] ?? match[2]).trim()).filter(Boolean)
     const escapeRegex = char => char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const punctuation = [...new Set(search.match(/\p{P}/gu) || [])].map(escapeRegex).join('|')
-    // Keep punctuation named in the query literal; ignore all other punctuation.
-    const ignored = punctuation ? `(?!(?:${punctuation}))\\p{P}` : '\\p{P}'
-    // Punctuation can separate words or join letters, but real spaces stay significant.
-    const pattern = [...search].map(char => char === ' '
-        ? `(?:\\s|${ignored})+` : escapeRegex(char)).join(`(?:${ignored})*`)
-    return new RegExp(pattern, 'u').test(text)
+    const matchers = clauses.map(clause => {
+        const punctuation = [...new Set(clause.match(/\p{P}/gu) || [])].map(escapeRegex).join('|')
+        // Keep punctuation named in each clause literal; ignore all other punctuation.
+        const ignored = punctuation ? `(?!(?:${punctuation}))\\p{P}` : '\\p{P}'
+        // Punctuation can separate words or join letters, but phrase spaces stay significant.
+        const pattern = [...clause].map(char => char === ' '
+            ? `(?:\\s|${ignored})+` : escapeRegex(char)).join(`(?:${ignored})*`)
+        const regex = new RegExp(pattern, 'u')
+        return text => text.includes(clause) || regex.test(text)
+    })
+    return values => {
+        const fields = (Array.isArray(values) ? values : [values]).filter(Boolean).map(normalizeSearch)
+        // Terms may match different fields; phrases must remain within one field or tag.
+        return matchers.length > 0 && matchers.every(matches => fields.some(matches))
+    }
 }
 
-function matchesFilters(item) {
+function matchesFilters(item, searchMatcher) {
     const filters = GALLERY_STATE.filters
     if (filters.minReactions > 0 && (item.reactions ?? 0) < filters.minReactions) return false
     const classification = GALLERY_STATE.classificationIndex[item.imageId]
     if (filters.template && classification?.template !== filters.template) return false
     if (filters.search) {
         const details = GALLERY_STATE.classificationTextIndex[item.imageId]
-        const text = [details?.text, details?.description,
-            classification?.template, ...classificationTags(classification)].filter(Boolean).join(' ')
-        if (!matchesSearch(text, filters.search)) return false
+        const fields = [details?.text, details?.description,
+            classification?.template, ...classificationTags(classification)]
+        if (!searchMatcher(fields)) return false
     }
     return true
 }
@@ -747,7 +756,8 @@ async function updateGallery() {
     if (filtered && !GALLERY_STATE.filteredItems) {
         // Start the bounded background loader, but render already available matches.
         loadAllItems()
-        GALLERY_STATE.filteredItems = GALLERY_STATE.dataSource.filter(matchesFilters)
+        const searchMatcher = compileSearch(GALLERY_STATE.filters.search)
+        GALLERY_STATE.filteredItems = GALLERY_STATE.dataSource.filter(item => matchesFilters(item, searchMatcher))
             .map((item, galleryIndex) => ({ ...item, galleryIndex }))
     }
     const totalEntries = filtered ? GALLERY_STATE.filteredItems.length : GALLERY_STATE.totalEntries

@@ -1343,7 +1343,7 @@ test('search ignores unrequested punctuation as separators or joins, but keeps r
     const context = {}
     vm.runInNewContext(appSource.slice(appSource.indexOf('function normalizeSearch('),
         appSource.indexOf('function matchesFilters(')), context)
-    const matches = (text, query) => context.matchesSearch(text, context.normalizeSearch(query))
+    const matches = (text, query) => context.compileSearch(query)(text)
     for (const punctuation of ['_', '-', '‐', '‑', '–', '—', ',', '.', ':', ';', '/', '…', '「', '」']) {
         assert.equal(matches(`Foo${punctuation}Bar`, 'foo bar'), true, punctuation)
         assert.equal(matches(`Foo${punctuation}Bar`, 'foobar'), true, punctuation)
@@ -1367,6 +1367,90 @@ test('search ignores unrequested punctuation as separators or joins, but keeps r
     ]) {
         assert.equal(matches(text, query), expected, `${JSON.stringify(text)} / ${JSON.stringify(query)}`)
     }
+})
+
+test('search requires every term in any order and keeps quoted phrases within one field', () => {
+    const context = {}
+    vm.runInNewContext(appSource.slice(appSource.indexOf('function normalizeSearch('),
+        appSource.indexOf('function matchesFilters(')), context)
+    for (const [fields, query, expected] of [
+        ['Steuern sind Diebstahl', 'steuern diebstahl', true],
+        ['Steuern sind Diebstahl', 'diebstahl steuern', true],
+        ['Steuern sind Diebstahl', '  DIEBSTAHL   steuern  ', true],
+        ['Steuern sind Diebstahl', 'steuern steuern', true],
+        ['Steuern sind Diebstahl', 'steuern geld', false],
+        ['Steuern sind Diebstahl', 'steuer dieb', true],
+        ['Steuern sind Diebstahl', 'steurn diebstahl', false],
+        ['Steuern sind Diebstahl', '"steuern sind diebstahl"', true],
+        ['Steuern sind Diebstahl', '"steuern diebstahl"', false],
+        ['Steuern sind Diebstahl', '"diebstahl sind steuern"', false],
+        ['Steuern sind Diebstahl', '"steuern sind" diebstahl', true],
+        ['Steuern sind Diebstahl', 'diebstahl "steuern sind"', true],
+        ['Steuern sind Diebstahl', '"steuern sind" geld', false],
+        [['Steuern', 'sind Diebstahl'], 'diebstahl steuern', true],
+        [['Steuern', 'sind Diebstahl'], '"steuern sind diebstahl"', false],
+        [['shared tag', 'english tag'], '"shared tag" "english tag"', true],
+        [['shared tag', 'english tag'], '"tag english"', false],
+        ['Hello,\n“world”!', '"HELLO world"', true],
+        ["Don't_panic!", '"dont panic"', true],
+        ['Käse_Öl', '"KASE OL"', true],
+        ['first\nsecond', '"firstsecond"', false],
+        ['foo-bar hello_world', 'world foo-bar', true],
+        ['foo_bar hello_world', 'world foo-bar', false],
+        ['Steuern sind Diebstahl', '"steuern sind', true],
+        ['Steuern sind Diebstahl', '"steuern diebstahl', false],
+        ['Steuern sind Diebstahl', '"" steuern', true],
+        ['Steuern sind Diebstahl', '""', false],
+        ['Steuern sind Diebstahl', '"   "', false],
+        [[], 'steuern', false],
+    ]) {
+        assert.equal(context.compileSearch(query)(fields), expected,
+            `${JSON.stringify(fields)} / ${JSON.stringify(query)}`)
+    }
+    const matcher = context.compileSearch('steuern diebstahl')
+    assert.equal(matcher(['Diebstahl', 'Steuern']), true)
+    assert.equal(matcher(['Steuern']), false, 'compiled matchers can be reused across images')
+    assert.equal(matcher(['Steuern sind Diebstahl']), true)
+})
+
+test('multi-term and quoted searches combine metadata filters and survive shared URLs', async () => {
+    const classifications = {
+        [imageId]: {
+            text: 'Steuern sind Diebstahl', description: 'Eine politische Aussage', template: result.template,
+            tag_format_version: 2, tags: ['shared tag'], tags_de: ['Äpfel'], tags_en: ['taxation'],
+        },
+        '2024/01/2024-01-01_a.jpg': {
+            text: 'Steuern sind', description: 'Diebstahl', template: result.template, tags: ['taxation'],
+        },
+    }
+    const ui = gallery()
+    ui.resolveClassifications(classifications)
+    await flush()
+    for (const query of ['diebstahl steuern', 'taxation apfel politisch', '"Steuern sind Diebstahl" taxation']) {
+        await applyFilters(ui, {
+            'filter-reactions': '7', 'filter-template': result.template, 'filter-search': query,
+        })
+        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', query)
+        assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
+        assert.doesNotMatch(ui.node.innerHTML, /2024-01-01_a.jpg/)
+        assert.equal(new URL(ui.context.location.href).searchParams.get('q'), query)
+    }
+    const shared = gallery(false, [], null, 'localhost', {
+        query: new URL(ui.context.location.href).search,
+    })
+    shared.resolveClassifications(classifications)
+    await flush()
+    await flush()
+    assert.equal(shared.controls['filter-search'].value, '"Steuern sind Diebstahl" taxation')
+    assert.equal(shared.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.match(shared.node.innerHTML, /2024-01-02_b.jpg/)
+
+    await applyFilters(ui, { 'filter-reactions': '0', 'filter-search': 'diebstahl steuern' })
+    assert.equal(ui.controls['filter-status'].textContent, '2 passende Bilder', 'terms can span fields')
+    await applyFilters(ui, { 'filter-search': '"steuern sind diebstahl"' })
+    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', 'phrases cannot span fields')
+    await applyFilters(ui, { 'filter-search': '"tag apfel"' })
+    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder', 'phrases cannot span tags')
 })
 
 test('search normalizes German umlauts in queries and entries without changing displayed text or URLs', async () => {
@@ -1428,7 +1512,8 @@ test('search matches phrases across line breaks in text and descriptions', async
     })
     await flush()
     for (const search of ['FIRST second third fourth', 'description spanning multiple lines',
-        '  first   second  ', 'description\nspanning']) {
+        '  first   second  ', 'description\nspanning', '"FIRST second third fourth"',
+        '"description spanning multiple lines"', '"first second" "multiple lines"']) {
         await applyFilters(ui, { 'filter-search': search })
         assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
         assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)

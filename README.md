@@ -931,7 +931,20 @@ Templates are not language-filtered. All combined tags remain in the overlay and
 and available space limits which other tags are shown. Descriptions provide thumbnail tooltips and
 accessible labels. Images without results are marked “Not classified”; missing
 metadata does not prevent browsing production-hosted images. Search matches OCR,
-descriptions, template names and tags case-insensitively; tag suggestions are not
+descriptions, template names and tags case-insensitively. Unquoted terms use AND
+matching in any order: `steuern diebstahl` and `diebstahl steuern` find the same
+images, even with intervening words or terms in different fields. Double quotes
+require a phrase within one OCR text, description, template name or individual
+tag: `"steuern sind diebstahl"`. Terms and phrases can be combined, for example
+`politik "steuern sind diebstahl"`; every term and phrase must match. An unfinished
+quote treats the rest of the input as a phrase. Empty quoted phrases are ignored;
+a query with only empty quotes has no matches.
+
+Search retains substring matching, whitespace normalization, `ä/ö/ü` equivalence
+to `a/o/u`, and tolerance for punctuation not explicitly present in each term or
+phrase. Original spelling and quotes remain in the input and shared URL. Queries
+are parsed and regex matchers are compiled once per filter pass. Results remain
+newest-first; typo tolerance, relevance ranking and tag suggestions are not
 implemented yet.
 
 Offline tests:
