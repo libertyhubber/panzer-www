@@ -15,7 +15,8 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
     let html = '', thumbnails = []
     const thumbnailPattern = /<a href="[^"]*" class="thumbnail" style="[^"]*"[^>]*>/g
     const node = {
-        clientWidth: options.clientWidth || 472, style: {},
+        clientWidth: options.clientWidth || 456,
+        style: { setProperty(name, value) { this[name] = value } },
         querySelectorAll: selector => selector === '.thumbnail' ? thumbnails
             : selector === '.classification-tags' ? tagGroups
             : selector === '.classification-more' ? options.moreButtons || [] : [],
@@ -41,7 +42,8 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
             })
         },
     }
-    const controls = Object.fromEntries(['filter-reactions', 'filter-template', 'filter-search', 'filter-status'].map(id =>
+    const controls = Object.fromEntries(['filter-reactions', 'filter-template', 'filter-search', 'filter-status',
+        'filter-search-clear', 'filter-search-icon'].map(id =>
         [id, {
             value: id === 'filter-reactions' ? '0' : '', innerHTML: '',
             get options() {
@@ -126,7 +128,13 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
                     style: {}, attributes: {},
                     setAttribute(name, value) { this.attributes[name] = value }, addEventListener() {},
                     querySelector: selector => selector === 'pre' ? pre : firstButton,
-                    getBoundingClientRect: () => options.overlayBounds || { width: 200, height: 100 },
+                    getBoundingClientRect() {
+                        const bounds = options.overlayBounds || { width: 200, height: 100 }
+                        return {
+                            width: Math.min(bounds.width, parseFloat(this.style.maxWidth) || Infinity),
+                            height: Math.min(bounds.height, parseFloat(this.style.maxHeight) || Infinity),
+                        }
+                    },
                     contains(target) { return target === this || target.overlayParent === this },
                     remove() { this.removed = true; if (overlay === this) overlay = null },
                     showModal() { this.open = true },
@@ -182,8 +190,8 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
             }))
             return entries
         },
-        innerWidth: 400,
-        innerHeight: options.innerHeight || 4 * 364,
+        innerWidth: options.innerWidth || 400,
+        innerHeight: options.innerHeight || 4 * 305,
         addEventListener: (event, handler) => {
             (listeners[event] ||= []).push(handler)
         },
@@ -369,7 +377,7 @@ test('renders before classifications arrive, then enriches metadata safely', asy
     assert.match(ui.node.innerHTML, /Klassifizierung wird geladen…/)
     assert.match(ui.node.innerHTML, /https:\/\/archive.example\/images\/2024\/01\/2024-01-02_b.jpg/)
     assert.match(ui.node.innerHTML, /RosaroterPanzerBackup\/42/)
-    assert.equal(ui.node.style.height, '364px')
+    assert.equal(ui.node.style.height, '305px')
 
     ui.resolveClassifications({ [imageId]: result, '2023/12/not-visible.jpg': result })
     await flush()
@@ -392,19 +400,20 @@ test('renders before classifications arrive, then enriches metadata safely', asy
 test('only whole tags that fit remain visible and keyboard-accessible', async () => {
     const tag = rect => ({ style: {}, getBoundingClientRect: () => rect })
     const fitting = tag({ bottom: 18, left: 0, right: 80 })
+    const secondRow = tag({ top: 21, bottom: 39, left: 0, right: 80 })
     const thirdRow = tag({ top: 42, bottom: 60, left: 0, right: 80 })
     const clippedRow = tag({ top: 63, bottom: 81, left: 0, right: 80 })
     const tooWide = tag({ bottom: 18, left: 0, right: 160 })
     const ui = gallery(false, [{
-        getBoundingClientRect: () => ({ bottom: 60, left: 0, right: 150 }),
-        children: [fitting, thirdRow, clippedRow, tooWide],
+        getBoundingClientRect: () => ({ bottom: 39, left: 0, right: 150 }),
+        children: [fitting, secondRow, thirdRow, clippedRow, tooWide],
     }])
     await flush()
     assert.equal(fitting.style.visibility, 'visible')
     assert.equal(fitting.tabIndex, 0)
-    assert.equal(thirdRow.style.visibility, 'visible', 'all three lines must fit including row gaps')
-    assert.equal(thirdRow.tabIndex, 0)
-    for (const tag of [clippedRow, tooWide]) {
+    assert.equal(secondRow.style.visibility, 'visible', 'two lines must fit including the row gap')
+    assert.equal(secondRow.tabIndex, 0)
+    for (const tag of [thirdRow, clippedRow, tooWide]) {
         assert.equal(tag.style.visibility, 'hidden')
         assert.equal(tag.style.display, 'none', 'omitted tags must not occupy layout space')
         assert.equal(tag.disabled, true)
@@ -448,7 +457,7 @@ function clickMore(ui, trigger, extra = {}) {
 
 test('counter only appears for overflow and counts tags omitted to make room for itself', async () => {
     const small = flowingTags([80])
-    const full = flowingTags([140, 140, 140, 80])
+    const full = flowingTags([140, 140, 80])
     const empty = flowingTags([])
     const groups = [small.group, full.group, empty.group]
     const buttons = groups.map(group => moreButton(group))
@@ -457,14 +466,14 @@ test('counter only appears for overflow and counts tags omitted to make room for
     assert.equal(buttons[0].hidden, true)
     assert.equal(buttons[1].hidden, false)
     assert.equal(buttons[2].hidden, true, 'an empty tag group needs no overflow button')
-    assert.equal(full.tags[2].style.display, 'none', 'make room for the inline counter')
-    assert.equal(full.tags[2].disabled, true)
-    assert.equal(full.tags[2].tabIndex, -1)
-    assert.equal(full.tags[3].style.visibility, 'visible')
+    assert.equal(full.tags[1].style.display, 'none', 'make room for the inline counter')
+    assert.equal(full.tags[1].disabled, true)
+    assert.equal(full.tags[1].tabIndex, -1)
+    assert.equal(full.tags[2].style.visibility, 'visible')
     assert.equal(buttons[1].textContent, '+1')
     assert.equal(buttons[1].attributes['aria-label'], '1 weitere Schlagwörter anzeigen')
-    assert.equal(buttons[1].getBoundingClientRect().top, full.tags[3].getBoundingClientRect().top)
-    assert.ok(buttons[1].getBoundingClientRect().left > full.tags[3].getBoundingClientRect().right)
+    assert.equal(buttons[1].getBoundingClientRect().top, full.tags[2].getBoundingClientRect().top)
+    assert.ok(buttons[1].getBoundingClientRect().left > full.tags[2].getBoundingClientRect().right)
     ui.resolveClassifications({})
     await flush()
     assert.equal(buttons[1].textContent, '+1')
@@ -472,7 +481,7 @@ test('counter only appears for overflow and counts tags omitted to make room for
 
 function flowingTags(widths) {
     const group = {
-        getBoundingClientRect: () => ({ top: 0, bottom: 60, left: 0, right: 150 }),
+        getBoundingClientRect: () => ({ top: 0, bottom: 39, left: 0, right: 150 }),
         children: [],
     }
     const tags = widths.map(width => ({
@@ -492,13 +501,149 @@ function flowingTags(widths) {
     return { group, tags }
 }
 
+test('clearly English tags are overlay-only while German and ambiguous tags stay eligible', async () => {
+    const ui = gallery()
+    await flush()
+    const english = ['political satire', 'German text', 'cat', 'taxes are theft', 'two-panel meme']
+    const inline = ['politische Satire', 'politischer Humor', 'blonde Frau', 'Student',
+        'vier-panel-meme', 'Screenshot', 'Bitcoin', 'Star Wars', 'Bert', 'Katze', 'Comic', 'Text']
+    ui.resolveClassifications({ [imageId]: { tags: [...english, ...inline], template: 'The Office' },
+        'other/image.jpg': { tags: [], template: 'The Office' } })
+    await flush()
+    for (const tag of english) {
+        assert.ok(ui.node.innerHTML.includes(`class="classification-tag" data-overlay-only="true">${tag}</button>`), tag)
+    }
+    for (const tag of inline) {
+        assert.ok(ui.node.innerHTML.includes(`class="classification-tag">${tag}</button>`), tag)
+    }
+    assert.match(ui.node.innerHTML, /class="classification-tag meme-template">The Office/,
+        'recognized templates are not language-filtered')
+    clickMore(ui, moreButton())
+    for (const tag of [...english, ...inline]) assert.ok(ui.overlay.innerHTML.includes(`>${tag}</button>`), tag)
+    assert.doesNotMatch(ui.overlay.innerHTML, /data-overlay-only/)
+    await applyFilters(ui, { 'filter-search': 'taxes are theft' })
+    assert.equal(thumbnailCount(ui), 1, 'English tags remain searchable')
+})
+
+test('explicit German lists override vocabulary guesses and retain all English tags for search and overlay', async () => {
+    const ui = gallery()
+    await flush()
+    // Names can contain English words; explicit metadata, not vocabulary, decides.
+    const tags = ['Government', 'Katze', 'Bitcoin', 'rhinoceros', 'cat']
+    ui.resolveClassifications({ [imageId]: {
+        tags, tags_de: ['government', 'Katze', 'Bitcoin'],
+        tags_en: ['Government', 'Bitcoin', 'rhinoceros', 'cat'], template: null,
+    } })
+    await flush()
+    for (const tag of ['Government', 'Katze', 'Bitcoin']) {
+        assert.ok(ui.node.innerHTML.includes(`class="classification-tag">${tag}</button>`), tag)
+    }
+    for (const tag of ['rhinoceros', 'cat']) {
+        assert.ok(ui.node.innerHTML.includes(`data-overlay-only="true">${tag}</button>`), tag)
+    }
+    clickMore(ui, moreButton())
+    for (const tag of tags) assert.ok(ui.overlay.innerHTML.includes(`>${tag}</button>`), tag)
+    assert.doesNotMatch(ui.overlay.innerHTML, /data-overlay-only/)
+    for (const search of ['rhinoceros', 'cat']) {
+        await applyFilters(ui, { 'filter-search': search })
+        assert.equal(thumbnailCount(ui), 1, 'English tags remain searchable')
+    }
+})
+
+test('neutral format displays German plus shared and unresolved tags while searching all three lists', async () => {
+    const ui = gallery()
+    await flush()
+    const neutral = ['Bitcoin', 'unresolved government thing']
+    const german = ['Katze']
+    const english = ['rhinoceros', 'cat']
+    ui.resolveClassifications({ [imageId]: {
+        tags: neutral, tags_de: german, tags_en: english, tag_format_version: 2, template: null,
+    } })
+    await flush()
+    for (const tag of [...neutral, ...german]) {
+        assert.ok(ui.node.innerHTML.includes(`class="classification-tag">${tag}</button>`), tag)
+    }
+    for (const tag of english) {
+        assert.ok(ui.node.innerHTML.includes(`data-overlay-only="true">${tag}</button>`), tag)
+    }
+    clickMore(ui, moreButton())
+    for (const tag of [...neutral, ...german, ...english]) {
+        assert.ok(ui.overlay.innerHTML.includes(`>${tag}</button>`), tag)
+    }
+    assert.doesNotMatch(ui.overlay.innerHTML, /data-overlay-only/)
+    for (const search of [...neutral, ...german, ...english]) {
+        await applyFilters(ui, { 'filter-search': search })
+        assert.equal(thumbnailCount(ui), 1, 'search includes every tag group')
+    }
+})
+
+test('English-only neutral-format records still have a tag group and full overlay', async () => {
+    const ui = gallery()
+    await flush()
+    ui.resolveClassifications({ [imageId]: {
+        tags: [], tags_de: [], tags_en: ['rhinoceros'], tag_format_version: 2, template: null,
+    } })
+    await flush()
+    assert.match(ui.node.innerHTML, /class="classification-tags"/)
+    assert.ok(ui.node.innerHTML.includes('data-overlay-only="true">rhinoceros</button>'))
+    clickMore(ui, moreButton())
+    assert.ok(ui.overlay.innerHTML.includes('>rhinoceros</button>'))
+    await applyFilters(ui, { 'filter-search': 'rhinoceros' })
+    assert.equal(thumbnailCount(ui), 1)
+})
+
+test('explicit empty German list does not fall back to language guessing', async () => {
+    const ui = gallery()
+    await flush()
+    ui.resolveClassifications({ [imageId]: {
+        tags: ['rhinoceros', 'Bitcoin'], tags_de: [], tags_en: ['rhinoceros', 'Bitcoin'], template: null,
+    } })
+    await flush()
+    for (const tag of ['rhinoceros', 'Bitcoin']) {
+        assert.ok(ui.node.innerHTML.includes(`data-overlay-only="true">${tag}</button>`), tag)
+    }
+    clickMore(ui, moreButton())
+    assert.ok(ui.overlay.innerHTML.includes('>rhinoceros</button>'))
+    assert.ok(ui.overlay.innerHTML.includes('>Bitcoin</button>'))
+})
+
+test('overlay-only tags take no inline space, are not focusable, and are counted even without overflow', async () => {
+    const mixed = flowingTags([140, 140, 80])
+    const englishOnly = flowingTags([80, 80])
+    const englishTags = [...mixed.tags.slice(0, 2), ...englishOnly.tags]
+    for (const tag of englishTags) tag.getAttribute = name => name === 'data-overlay-only' ? 'true' : null
+    const mixedMore = moreButton(mixed.group)
+    const englishMore = moreButton(englishOnly.group)
+    const ui = gallery(false, [mixed.group, englishOnly.group])
+    await flush()
+    const check = () => {
+        for (const tag of englishTags) {
+            assert.equal(tag.style.display, 'none')
+            assert.equal(tag.style.visibility, 'hidden')
+            assert.equal(tag.disabled, true)
+            assert.equal(tag.tabIndex, -1)
+        }
+        assert.equal(mixed.tags[2].style.visibility, 'visible')
+        assert.equal(mixed.tags[2].getBoundingClientRect().top, 0, 'English tags do not use a row')
+        for (const more of [mixedMore, englishMore]) {
+            assert.equal(more.hidden, false)
+            assert.equal(more.textContent, '+2')
+            assert.ok(more.getBoundingClientRect().bottom <= 39)
+        }
+    }
+    check()
+    ui.resolveClassifications({})
+    await flush()
+    check()
+})
+
 test('counter reserves space for multi-digit hidden counts and repacks on subsequent renders', async () => {
     const { group, tags } = flowingTags([...Array(14).fill(140), 20])
     const more = moreButton(group)
     const ui = gallery(false, [group])
     await flush()
-    assert.equal(more.textContent, '+12')
-    assert.equal(tags.filter(tag => tag.disabled).length, 12)
+    assert.equal(more.textContent, '+13')
+    assert.equal(tags.filter(tag => tag.disabled).length, 13)
     assert.ok(more.getBoundingClientRect().bottom <= group.getBoundingClientRect().bottom)
     assert.ok(more.getBoundingClientRect().right <= group.getBoundingClientRect().right)
     for (const tag of tags) tag.width = 10
@@ -508,33 +653,33 @@ test('counter reserves space for multi-digit hidden counts and repacks on subseq
     assert.ok(tags.every(tag => !tag.disabled && tag.tabIndex === 0))
 })
 
-test('a rejected long tag frees the third row for a later shorter tag', async () => {
-    const { group, tags } = flowingTags([140, 140, 80, 90, 35])
-    const more = moreButton(group)
-    const ui = gallery(false, [group], null, 'localhost', { moreButtons: [more] })
-    await flush()
-    assert.equal(tags[3].style.display, 'none')
-    assert.equal(tags[3].disabled, true)
-    assert.equal(tags[4].style.visibility, 'visible')
-    assert.equal(tags[4].style.display, '')
-    assert.equal(tags[4].disabled, false)
-    assert.equal(tags[4].tabIndex, 0)
-    assert.equal(tags[4].getBoundingClientRect().top, 42)
-    assert.equal(more.hidden, false)
-    ui.resolveClassifications({})
-    await flush()
-    assert.equal(tags[4].style.visibility, 'visible', 'repeated fitting must reset and repack all candidates')
-})
-
-test('a tag rejected to reserve counter space leaves room for subsequent shorter tags', async () => {
-    const { group, tags } = flowingTags([140, 140, 140, 80, 20])
+test('a rejected long tag frees the second row for a later shorter tag', async () => {
+    const { group, tags } = flowingTags([140, 80, 90, 35])
     const more = moreButton(group)
     const ui = gallery(false, [group], null, 'localhost', { moreButtons: [more] })
     await flush()
     assert.equal(tags[2].style.display, 'none')
+    assert.equal(tags[2].disabled, true)
     assert.equal(tags[3].style.visibility, 'visible')
-    assert.equal(tags[4].style.visibility, 'visible')
-    assert.equal(tags[4].getBoundingClientRect().top, 42)
+    assert.equal(tags[3].style.display, '')
+    assert.equal(tags[3].disabled, false)
+    assert.equal(tags[3].tabIndex, 0)
+    assert.equal(tags[3].getBoundingClientRect().top, 21)
+    assert.equal(more.hidden, false)
+    ui.resolveClassifications({})
+    await flush()
+    assert.equal(tags[3].style.visibility, 'visible', 'repeated fitting must reset and repack all candidates')
+})
+
+test('a tag rejected to reserve counter space leaves room for subsequent shorter tags', async () => {
+    const { group, tags } = flowingTags([140, 140, 80, 20])
+    const more = moreButton(group)
+    const ui = gallery(false, [group], null, 'localhost', { moreButtons: [more] })
+    await flush()
+    assert.equal(tags[1].style.display, 'none')
+    assert.equal(tags[2].style.visibility, 'visible')
+    assert.equal(tags[3].style.visibility, 'visible')
+    assert.equal(tags[3].getBoundingClientRect().top, 21)
     assert.equal(more.hidden, false)
     ui.resolveClassifications({})
     await flush()
@@ -592,16 +737,44 @@ test('tag overlay clamps to viewport edges and supports keyboard opening and Esc
     assert.equal(ui.overlay.style.top, '30px')
 })
 
-test('overlay keeps its top aligned near the viewport bottom and scrolls within the remaining height', async () => {
-    const ui = gallery()
+test('overlay moves up near the viewport bottom without reducing its height limit', async () => {
+    for (const contentHeight of [100, 400]) {
+        const ui = gallery(false, [], null, 'localhost', {
+            overlayBounds: { width: 350, height: contentHeight },
+        })
+        await flush()
+        ui.resolveClassifications({ [imageId]: { tags: ['cat'], template: null } })
+        await flush()
+        const top = ui.context.innerHeight - 60
+        const trigger = moreButton({ children: [], getBoundingClientRect: () => ({ top }) })
+        clickMore(ui, trigger, { clientX: ui.context.innerWidth - 1 })
+        const expectedHeight = Math.min(contentHeight, 250)
+        assert.equal(ui.overlay.style.top, `${ui.context.innerHeight - expectedHeight - 8}px`)
+        assert.equal(ui.overlay.style.maxHeight, '250px')
+        assert.equal(ui.overlay.style.left, '42px')
+        assert.equal(ui.overlay.getBoundingClientRect().height, expectedHeight)
+        clickMore(ui, trigger)
+        clickMore(ui, trigger, { clientX: -20 })
+        assert.equal(ui.overlay.style.left, '8px', 'keep the overlay inside the left edge')
+    }
+})
+
+test('overlay measures with full viewport limits before positioning in a small viewport', async () => {
+    const ui = gallery(false, [], null, 'localhost', {
+        innerWidth: 300, innerHeight: 200, overlayBounds: { width: 350, height: 400 },
+    })
     await flush()
     ui.resolveClassifications({ [imageId]: { tags: ['cat'], template: null } })
     await flush()
-    const top = ui.context.innerHeight - 60
-    const trigger = moreButton({ children: [], getBoundingClientRect: () => ({ top }) })
-    clickMore(ui, trigger)
-    assert.equal(ui.overlay.style.top, `${top}px`)
-    assert.equal(ui.overlay.style.maxHeight, '52px')
+    // Client dimensions exclude the browser scrollbars.
+    ui.context.document.documentElement.clientWidth = 285
+    ui.context.document.documentElement.clientHeight = 185
+    const trigger = moreButton({ children: [], getBoundingClientRect: () => ({ top: 180 }) })
+    clickMore(ui, trigger, { clientX: 290 })
+    assert.equal(ui.overlay.style.maxWidth, '269px')
+    assert.equal(ui.overlay.style.maxHeight, '169px')
+    assert.equal(ui.overlay.style.left, '8px')
+    assert.equal(ui.overlay.style.top, '8px')
 })
 
 test('overlay tag clicks still filter, and outside click, close button, scroll and resize dismiss it', async () => {
@@ -634,11 +807,13 @@ test('overlay tag clicks still filter, and outside click, close button, scroll a
 
 test('tag counter is inline while the overlay stays outside normal document flow', () => {
     const style = readFileSync(`${__dirname}/../assets/style.css`, 'utf8')
-    assert.match(style, /\.classification-tags \{[^}]*position: relative;[^}]*gap: 3px;[^}]*height: 60px;/)
+    assert.match(style, /\.classification-tags \{[^}]*position: relative;[^}]*gap: 3px;[^}]*height: 39px;/)
     assert.match(style, /\.classification-more \{[^}]*flex: 0 0 auto;[^}]*font: inherit;[^}]*white-space: nowrap;/)
     assert.doesNotMatch(style, /\.classification-more \{[^}]*position: absolute;/)
     assert.match(style, /\.classification-more\[hidden\] \{[^}]*display: none;/)
-    assert.match(style, /#all-tags-overlay \{[^}]*position: fixed;[^}]*overflow-y: auto;/)
+    assert.match(style, /#all-tags-overlay \{[^}]*position: fixed;[^}]*box-sizing: border-box;/)
+    assert.match(style, /#all-tags-overlay \{[^}]*width: min\(350px, calc\(100vw - 16px\)\);/)
+    assert.match(style, /#all-tags-overlay \{[^}]*max-height: min\(250px, calc\(100vh - 16px\)\);[^}]*overflow-y: auto;/)
     assert.match(style, /\.tags-overlay-list \.classification-tag \{[^}]*visibility: visible;/)
 })
 
@@ -700,7 +875,62 @@ test('search input waits for 200 ms of inactivity before applying the latest val
     assert.equal(timers.size, 0, 'no redundant search handler remains queued')
 })
 
-test('clicking a tag fills the search and filters without opening the lightbox', async () => {
+test('search icons reflect the input value immediately, regardless of focus', async () => {
+    const ui = gallery()
+    await flush()
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    const search = ui.controls['filter-search']
+    const clear = ui.controls['filter-search-clear']
+    const icon = ui.controls['filter-search-icon']
+    assert.equal(clear.hidden, true)
+    assert.equal(icon.hidden, false)
+    for (const value of ['OCR', ' ', '']) {
+        search.value = value
+        search.handler()
+        assert.equal(clear.hidden, value === '')
+        assert.equal(icon.hidden, value !== '')
+        assert.notEqual(search.focused, true)
+    }
+    await new Promise(resolve => setTimeout(resolve, 380))
+})
+
+test('clear search applies immediately, cancels pending input, and updates icons on history navigation', async () => {
+    const ui = gallery(false, [], null, 'localhost', { query: '?q=Sesamstra%C3%9Fe' })
+    await flush()
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    const search = ui.controls['filter-search']
+    const clear = ui.controls['filter-search-clear']
+    const icon = ui.controls['filter-search-icon']
+    assert.equal(search.value, 'Sesamstraße')
+    assert.equal(clear.hidden, false)
+    assert.equal(icon.hidden, true)
+
+    search.value = 'pending change'
+    search.handler()
+    clear.handler()
+    assert.equal(search.value, '')
+    assert.equal(clear.hidden, true)
+    assert.equal(icon.hidden, false)
+    assert.notEqual(search.focused, true, 'clear must not open the mobile keyboard')
+    assert.equal(new URL(ui.context.location.href).searchParams.has('q'), false)
+    await new Promise(resolve => setTimeout(resolve, 380))
+    await flush()
+    assert.equal(ui.controls['filter-status'].textContent, '')
+    assert.equal(thumbnailCount(ui), 2)
+
+    await ui.context.history.go(-1)
+    assert.equal(search.value, 'Sesamstraße')
+    assert.equal(clear.hidden, false)
+    assert.equal(icon.hidden, true)
+    await ui.context.history.go(1)
+    assert.equal(search.value, '')
+    assert.equal(clear.hidden, true)
+    assert.equal(icon.hidden, false)
+})
+
+test('clicking a tag fills the search and filters without focus or opening the lightbox', async () => {
     const ui = gallery()
     await flush()
     ui.resolveClassifications({ [imageId]: result })
@@ -710,7 +940,9 @@ test('clicking a tag fills the search and filters without opening the lightbox',
         preventDefault() {},
     })
     assert.equal(ui.controls['filter-search'].value, 'Sesamstraße')
-    assert.equal(ui.controls['filter-search'].focused, true)
+    assert.notEqual(ui.controls['filter-search'].focused, true)
+    assert.equal(ui.controls['filter-search-clear'].hidden, false)
+    assert.equal(ui.controls['filter-search-icon'].hidden, true)
     await new Promise(resolve => setTimeout(resolve, 180))
     await flush()
     assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
@@ -911,7 +1143,7 @@ test('combines minimum reactions, template and case-insensitive literal text sea
     assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
     await applyFilters(ui, { 'filter-reactions': '0', 'filter-template': '', 'filter-search': '' })
     assert.match(ui.node.innerHTML, /2024-01-01_a.jpg/)
-    assert.equal(ui.node.style.height, '364px')
+    assert.equal(ui.node.style.height, '305px')
 })
 
 for (const failFirst of [false, true]) {
@@ -1036,6 +1268,83 @@ test('search covers older unloaded directories, descriptions and tags, not regex
     assert.equal(ui.node.innerHTML, '')
 })
 
+test('search ignores unrequested punctuation as separators or joins, but keeps requested punctuation literal', () => {
+    const context = {}
+    vm.runInNewContext(appSource.slice(appSource.indexOf('function normalizeSearch('),
+        appSource.indexOf('function matchesFilters(')), context)
+    const matches = (text, query) => context.matchesSearch(text, context.normalizeSearch(query))
+    for (const punctuation of ['_', '-', '‐', '‑', '–', '—', ',', '.', ':', ';', '/', '…', '「', '」']) {
+        assert.equal(matches(`Foo${punctuation}Bar`, 'foo bar'), true, punctuation)
+        assert.equal(matches(`Foo${punctuation}Bar`, 'foobar'), true, punctuation)
+        assert.equal(matches(`Foo${punctuation}Bar`, `foo${punctuation}bar`), true, punctuation)
+        assert.equal(matches('Foo Bar', `foo${punctuation}bar`), false, punctuation)
+        assert.equal(matches('FooBar', `foo${punctuation}bar`), false, punctuation)
+    }
+    for (const [text, query, expected] of [
+        ["Don't_panic!", 'dont panic', true],
+        ['Hello,\n“world”!', '  HELLO   world  ', true],
+        ['foo_bar-baz', 'foo_bar baz', true],
+        ['foo-bar_baz', 'foo_bar baz', false],
+        ['foo—bar', 'foo-bar', false],
+        ['first\nsecond', 'firstsecond', false],
+        ['anything', '.*', false],
+        ['literal .* pattern', '.*', true],
+        ['literal [a] pattern', '[a]', true],
+        ['literal a pattern', '[a]', false],
+        ['C++', 'C++', true],
+        ['C', 'C++', false],
+    ]) {
+        assert.equal(matches(text, query), expected, `${JSON.stringify(text)} / ${JSON.stringify(query)}`)
+    }
+})
+
+test('search normalizes German umlauts in queries and entries without changing displayed text or URLs', async () => {
+    const context = {}
+    vm.runInNewContext(appSource.slice(appSource.indexOf('function normalizeSearch('),
+        appSource.indexOf('function matchesFilters(')), context)
+    for (const value of ['äöü', 'ÄÖÜ', 'aou', 'AOU', 'a\u0308o\u0308u\u0308']) {
+        assert.equal(context.normalizeSearch(value), 'aou')
+    }
+    assert.equal(context.normalizeSearch('Straße'), 'straße', 'other letters stay unchanged')
+
+    const ui = gallery()
+    await flush()
+    ui.resolveClassifications({
+        [imageId]: {
+            text: 'Äpfel', description: 'Öl', template: 'Übung', tags: ['Grun', 'Käse_Öl'],
+        },
+    })
+    await flush()
+    for (const search of ['apfel', 'OL', 'ubung', 'GRÜN', 'kase ol', 'KÄSE_ÖL']) {
+        await applyFilters(ui, { 'filter-search': search })
+        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', search)
+        assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
+        assert.equal(ui.controls['filter-search'].value, search)
+        assert.equal(new URL(ui.context.location.href).searchParams.get('q'), search)
+    }
+    assert.match(ui.node.innerHTML, /Käse_Öl/)
+})
+
+test('punctuation-insensitive search covers text, descriptions, templates and all tag languages', async () => {
+    const ui = gallery()
+    await flush()
+    ui.resolveClassifications({
+        [imageId]: {
+            text: "Don't_panic!", description: 'Hello, world.', template: 'Example—template',
+            tag_format_version: 2, tags: ['shared/tag'], tags_de: ['deutsches_stichwort'], tags_en: ['english-tag'],
+        },
+    })
+    await flush()
+    for (const search of ['dont panic', 'hello world', 'example template', 'shared tag',
+        'deutsches stichwort', 'english tag', 'english-tag']) {
+        await applyFilters(ui, { 'filter-search': search })
+        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', search)
+        assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
+    }
+    await applyFilters(ui, { 'filter-search': 'english_tag' })
+    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+})
+
 test('search matches phrases across line breaks in text and descriptions', async () => {
     const ui = gallery()
     await flush()
@@ -1089,7 +1398,7 @@ test('derives local sprite filenames and offsets from the original index, not re
     assert.equal(previous.bgOffsetX, 888)
     assert.equal(previous.bgOffsetY, 666)
     assert.match(previous.src, /^https:\/\/archive.example\/images\//)
-    assert.equal(ui.node.style.height, `${21 * 364}px`)
+    assert.equal(ui.node.style.height, `${21 * 305}px`)
     ui.resolveClassifications({ [boundary.imageId]: { ...result, description: 'Boundary image' } })
     await flush()
     await applyFilters(ui, { 'filter-search': 'Boundary image' })
@@ -1114,26 +1423,26 @@ test('renders viewport rows plus one-row overscan and refreshes within a month',
     assert.deepEqual([...renderedSprites(ui)], ['images/2024/01/thumbnails-09.webp'])
     ui.resolveClassifications({})
     await flush()
-    ui.context.document.documentElement.scrollTop = 14 * 364
+    ui.context.document.documentElement.scrollTop = 14 * 305
     await updateViewport(ui)
     assert.equal(thumbnailCount(ui), 12)
     assert.doesNotMatch(ui.node.innerHTML, /-data-gallery-idx="0"/)
     assert.match(ui.node.innerHTML, /-data-gallery-idx="26"/)
     assert.deepEqual([...renderedSprites(ui)], ['images/2024/01/thumbnails-08.webp'])
-    ui.context.document.documentElement.scrollTop = 20 * 364
+    ui.context.document.documentElement.scrollTop = 20 * 305
     await updateViewport(ui)
     assert.deepEqual([...renderedSprites(ui)].sort(), ['images/2024/01/thumbnails-07.webp', 'images/2024/01/thumbnails-08.webp'])
 })
 
 test('twenty visible images need at most three sprites, including a partial newest sheet', async () => {
-    const ui = gallery(false, [], manyEntries(201), 'localhost', { clientWidth: 5 * 236 })
+    const ui = gallery(false, [], manyEntries(201), 'localhost', { clientWidth: 5 * 228 })
     await flush()
     assert.equal(thumbnailCount(ui), 25)
     assert.equal(renderedSprites(ui).size, 3)
     ui.resolveClassifications({})
     await flush()
     assert.equal(renderedSprites(ui).size, 3)
-    ui.context.document.documentElement.scrollTop = 10 * 364
+    ui.context.document.documentElement.scrollTop = 10 * 305
     await updateViewport(ui)
     assert.equal(thumbnailCount(ui), 30)
     assert.ok(renderedSprites(ui).size <= 3)
@@ -1141,11 +1450,11 @@ test('twenty visible images need at most three sprites, including a partial newe
 
 test('window accounts for the gallery offset and changes when only viewport height changes', async () => {
     const ui = gallery(false, [], manyEntries(200), 'localhost', {
-        clientWidth: 5 * 236, galleryTop: 2 * 364,
+        clientWidth: 5 * 228, galleryTop: 2 * 305,
     })
     await flush()
     assert.equal(thumbnailCount(ui), 15)
-    ui.context.innerHeight = 6 * 364
+    ui.context.innerHeight = 6 * 305
     await updateViewport(ui, 'resize')
     assert.equal(thumbnailCount(ui), 25)
     ui.resolveClassifications({})
@@ -1154,7 +1463,7 @@ test('window accounts for the gallery offset and changes when only viewport heig
 
 test('filtered results load originals in the same viewport-sized window', async () => {
     const entries = manyEntries(201)
-    const ui = gallery(false, [], entries, 'localhost', { clientWidth: 5 * 236 })
+    const ui = gallery(false, [], entries, 'localhost', { clientWidth: 5 * 228 })
     ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
         `2024/01/${entry.name}`, { tags: ['matching'], template: null },
     ])))
@@ -1164,7 +1473,7 @@ test('filtered results load originals in the same viewport-sized window', async 
     assert.equal(thumbnailCount(ui), 25)
     assert.equal(renderedOriginals().length, 25)
     assert.equal(renderedSprites(ui).size, 0)
-    ui.context.document.documentElement.scrollTop = 10 * 364
+    ui.context.document.documentElement.scrollTop = 10 * 305
     await updateViewport(ui)
     assert.equal(thumbnailCount(ui), 30)
     assert.equal(renderedOriginals().length, 30)
@@ -1188,7 +1497,7 @@ for (const [control, value] of [
         assert.equal(thumbnailCount(ui), 1)
         assert.equal(renderedSprites(ui).size, 0)
         assert.match(ui.node.innerHTML, /background-image: url\('https:\/\/archive.example\/images\/2024\/01\/2024-01-02_b.jpg'\);/)
-        assert.match(ui.node.innerHTML, /background-position: center; background-size: contain; background-color: black;/)
+        assert.match(ui.node.innerHTML, /background-position: center; background-size: contain; background-color: #000;/)
         const item = openGalleryItem(ui, 0)
         assert.equal(item.src, 'https://archive.example/images/2024/01/2024-01-02_b.jpg')
         await applyFilters(ui, { [control]: control === 'filter-reactions' ? '0' : '' })
@@ -1203,7 +1512,7 @@ test('unsupported WebP renders archive originals without requesting sprite sheet
     const ui = gallery(false, [], manyEntries(200), 'localhost', { webpSupported: false })
     await flush()
     assert.equal(renderedSprites(ui).size, 0)
-    assert.match(ui.node.innerHTML, /background-size: contain; background-color: black;/)
+    assert.match(ui.node.innerHTML, /background-size: contain; background-color: #000;/)
     assert.equal(thumbnailCount(ui), 10)
     assert.equal(spriteRequests(ui).length, 0)
     originalRequests(ui)[0].onload()
@@ -1247,8 +1556,42 @@ test('original upgrades wait for sprite load and paint, then wait for original d
     assert.equal(tile.style.backgroundImage, `url('${original.src}')`)
     assert.equal(tile.style.backgroundPosition, 'center')
     assert.equal(tile.style.backgroundSize, 'contain')
-    assert.equal(tile.style.backgroundColor, 'black')
+    assert.equal(tile.style.backgroundColor, '#000')
     assert.equal(renderedSprites(ui).size, 1, 'other tile still shows its preview')
+    ui.resolveClassifications({})
+    await flush()
+})
+
+test('entry bg is retained from sprite previews through original upgrades and filters', async () => {
+    const entries = [
+        { name: '2024-01-01_a.jpg', w: 500, h: 400, bg: 'ABC' },
+        { name: '2024-01-02_b.jpg', w: 500, h: 400, bg: 'FFF' },
+    ]
+    const ui = gallery(false, [], entries)
+    await flush()
+    const colors = () => ui.node.querySelectorAll('.thumbnail').map(tile => tile.style.backgroundColor)
+    assert.deepEqual(colors(), ['#FFF', '#ABC'])
+    for (const image of originalRequests(ui)) image.onload()
+    await flush()
+    assert.equal(renderedSprites(ui).size, 0)
+    assert.deepEqual(colors(), ['#FFF', '#ABC'])
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'Sesamstraße' })
+    assert.deepEqual(colors(), ['#FFF'])
+    await applyFilters(ui, { 'filter-search': '' })
+    assert.deepEqual(colors(), ['#FFF', '#ABC'])
+})
+
+test('missing or malformed entry bg falls back to black', async () => {
+    const entries = [undefined, null, 123, '#FFF', 'FFFFFF', 'FFF; color: red'].map((bg, index) => ({
+        name: `2024-01-01_${index}.jpg`, w: 500, h: 400, bg,
+    }))
+    const ui = gallery(false, [], entries, 'localhost', { webpSupported: false })
+    await flush()
+    for (const tile of ui.node.querySelectorAll('.thumbnail')) {
+        assert.equal(tile.style.backgroundColor, '#000')
+    }
     ui.resolveClassifications({})
     await flush()
 })
@@ -1306,7 +1649,7 @@ test('upgrades use at most four slots and discard queued images outside the new 
     assert.equal(originalRequests(ui).length, 4)
     assert.equal(spriteRequests(ui).length, 1)
     const old = [...originalRequests(ui)]
-    ui.context.document.documentElement.scrollTop = 20 * 364
+    ui.context.document.documentElement.scrollTop = 20 * 305
     await updateViewport(ui)
     assert.equal(originalRequests(ui).length, 4, 'old in-flight requests still occupy their slots')
     const before = ui.node.innerHTML
@@ -1343,7 +1686,7 @@ test('changing reaction filters clears queued upgrades even before the debounced
 
 test('each visible sheet gates its own upgrades, without fetching non-rendered sheets', async () => {
     const ui = gallery(false, [], manyEntries(201), 'localhost', {
-        clientWidth: 5 * 236, imageLoad() {},
+        clientWidth: 5 * 228, imageLoad() {},
     })
     await flush()
     assert.equal(spriteRequests(ui).length, 3)
@@ -1361,25 +1704,237 @@ test('each visible sheet gates its own upgrades, without fetching non-rendered s
 })
 
 test('gallery uses six columns when wide enough and fewer columns after resizing', async () => {
-    const ui = gallery(false, [], manyEntries(201), 'localhost', { clientWidth: 6 * 236 })
+    const ui = gallery(false, [], manyEntries(201), 'localhost', { clientWidth: 6 * 228 })
     await flush()
     assert.equal(thumbnailCount(ui), 30)
-    assert.equal(ui.node.style.height, `${Math.ceil(201 / 6) * 364}px`)
+    assert.equal(ui.node.style.height, `${Math.ceil(201 / 6) * 305}px`)
     ui.resolveClassifications({})
     await flush()
 
-    ui.node.clientWidth = 6 * 236 - 1
+    ui.node.clientWidth = 6 * 228 - 1
     await updateViewport(ui, 'resize')
     assert.equal(thumbnailCount(ui), 25)
-    assert.equal(ui.node.style.height, `${Math.ceil(201 / 5) * 364}px`)
+    assert.equal(ui.node.style.height, `${Math.ceil(201 / 5) * 305}px`)
+})
+
+test('filters have stable control sizes and a two-row mobile layout before classifications load', () => {
+    const style = readFileSync(`${__dirname}/../assets/style.css`, 'utf8')
+    const template = readFileSync(`${__dirname}/../templates/index.html`, 'utf8')
+    assert.match(template, /<label class="filter-template">\s*<select id="filter-template"[^>]*disabled>/)
+    assert.match(style, /#gallery-filters \.filter-template \{\s*width: 170px;\s*flex: 0 0 170px;/,
+        'option text must not determine the desktop wrapper width')
+    assert.match(style, /#gallery-filters input,\s*#gallery-filters select \{ height: 38px; \}/)
+    const mobile = style.slice(style.indexOf('@media screen and (max-width: 600px)'))
+    assert.match(mobile, /#gallery-filters \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*gap: 8px;/)
+    assert.match(mobile, /#gallery-filters \.filter-reactions,\s*#gallery-filters \.filter-template \{\s*width: 100%;/)
+    assert.match(mobile, /#gallery-filters \.filter-search,\s*#filter-status \{\s*grid-column: 1 \/ -1;/)
+    assert.match(style, /#filter-template \{ max-width: 170px; \}/)
+    assert.match(style, /#filter-status:empty \{ display: none; \}/, 'empty status must not create a third row')
 })
 
 test('220 px tiles and gallery geometry support six columns at full width', () => {
     const style = readFileSync(`${__dirname}/../assets/style.css`, 'utf8')
-    assert.match(style, /\.thumbnail \{[^}]*width: 220px;\s*height: 220px;/)
-    assert.match(style, /\.gallery-item \{[^}]*width: 236px;\s*height: 364px;/)
+    assert.match(style, /\.thumbnail \{[^}]*width: var\(--thumbnail-display-size, 220px\);\s*height: var\(--thumbnail-display-size, 220px\);/)
+    const card = style.match(/\.gallery-item \{([^}]+)\}/)[1]
+    assert.match(card, /width: var\(--thumbnail-display-size, 220px\);\s*height: var\(--gallery-card-height, 290px\);\s*border-radius: 5px;\s*overflow: clip;/)
+    assert.doesNotMatch(card, /background(?:-color)?:/, 'cards have no background color')
+    assert.doesNotMatch(card, /(?:margin|padding):/, 'JS layout supplies the spacing')
+    assert.match(style, /\.thumbnail-classification \{[^}]*height: 39px;/)
+    assert.match(style, /\.thumbnail-metadata \{[^}]*padding-top: 1px;[^}]*line-height: 24px;/)
+    assert.match(style, /\.classification-tags \{[^}]*line-height: 18px;/)
+    assert.match(style, /\.classification-tag \{[^}]*background: transparent;/)
+    assert.equal(305 - 290, 15, 'vertical gap')
+    assert.equal(228 - 220, 8, 'horizontal gap')
     const containerWidth = Number(style.match(/\.container \{[^}]*max-width: (\d+)px;/)[1])
-    assert.equal(containerWidth - 80, 6 * 236, 'six cards must fit inside the gallery margins')
+    assert.equal(containerWidth - 80, 6 * 240, 'six cards with maximum gaps fit inside the gallery margins')
+})
+
+test('absolute card positions supply gaps without CSS margins or padding', async () => {
+    const ui = gallery(false, [], manyEntries(6), 'localhost', { clientWidth: 456 })
+    await flush()
+    const positions = [...ui.node.innerHTML.matchAll(/<article class="gallery-item" style="top: ([\d.]+)px; left: ([\d.]+)px;/g)]
+        .map(([, top, left]) => [Number(top), Number(left)])
+    assert.deepEqual(positions, [[0, 4], [0, 232], [305, 4], [305, 232], [610, 4], [610, 232]])
+    assert.equal(positions[1][1] - positions[0][1] - 220, 8)
+    assert.equal(positions[2][0] - positions[0][0] - 290, 15)
+    assert.equal(ui.node.style.height, '915px')
+    ui.resolveClassifications({})
+    await flush()
+})
+
+test('horizontal gaps grow from 8px to 20px without sacrificing columns, with excess width centered', async () => {
+    const lefts = ui => [...ui.node.innerHTML.matchAll(/<article class="gallery-item" style="top: 0px; left: ([\d.]+)px;/g)]
+        .map(([, left]) => Number(left))
+    for (const [width, expected] of [
+        [456, [4, 232]],       // Minimum 8px gap.
+        [466, [6.5, 239.5]],   // 13px gap using all available width.
+        [480, [10, 250]],      // Maximum 20px gap.
+        [500, [20, 260]],      // Cap the gap, then center the remainder.
+        [684, [4, 232, 460]],  // A third column wins over larger gaps.
+    ]) {
+        const ui = gallery(false, [], manyEntries(6), 'localhost', { clientWidth: width })
+        await flush()
+        assert.deepEqual(lefts(ui), expected, `gallery width ${width}`)
+        ui.resolveClassifications({})
+        await flush()
+    }
+    const ui = gallery(false, [], manyEntries(6), 'localhost', { clientWidth: 466 })
+    await flush()
+    ui.resolveClassifications({})
+    await flush()
+    ui.node.clientWidth = 468
+    await updateViewport(ui, 'resize')
+    assert.deepEqual(lefts(ui), [7, 241], 'small resizes within the same column count still reposition cards')
+})
+
+test('full-width six-column gallery uses 20px horizontal gaps and 15px vertical gaps', async () => {
+    const ui = gallery(false, [], manyEntries(12), 'localhost', { clientWidth: 1440 })
+    await flush()
+    const positions = [...ui.node.innerHTML.matchAll(/<article class="gallery-item" style="top: ([\d.]+)px; left: ([\d.]+)px;/g)]
+        .map(([, top, left]) => [Number(top), Number(left)])
+    assert.deepEqual(positions.slice(0, 6), [10, 250, 490, 730, 970, 1210].map(left => [0, left]))
+    assert.equal(positions[1][1] - positions[0][1] - 220, 20)
+    assert.equal(positions[6][0] - positions[0][0] - 290, 15)
+    assert.equal(ui.node.style.height, '610px')
+    ui.resolveClassifications({})
+    await flush()
+})
+
+const cardPositions = ui => [...ui.node.innerHTML.matchAll(/<article class="gallery-item" style="top: ([\d.]+)px; left: ([\d.]+)px;/g)]
+    .map(([, top, left]) => [Number(top), Number(left)])
+
+test('iPhone SE viewport fits two 180px thumbnails with a 7px gap and 4px outer gutters', async () => {
+    const ui = gallery(false, [], manyEntries(41), 'localhost', {
+        clientWidth: 375, innerWidth: 375, innerHeight: 667, galleryTop: 130,
+    })
+    await flush()
+    assert.equal(ui.node.style['--thumbnail-display-size'], '180px')
+    assert.equal(ui.node.style['--gallery-card-height'], '250px')
+    assert.deepEqual(cardPositions(ui).slice(0, 4), [[0, 4], [0, 191], [265, 4], [265, 191]])
+    assert.equal(375 - 191 - 180, 4, 'right gutter')
+    assert.equal(ui.node.style.height, `${21 * 265}px`)
+    assert.equal(thumbnailCount(ui), 8, 'shorter rows render more cards in the same viewport')
+    const tiles = ui.node.querySelectorAll('.thumbnail')
+    const scale = 180 / 220
+    for (const tile of tiles) {
+        assert.ok(Math.abs(parseFloat(tile.style.backgroundSize) - 1108 * scale) < 1e-9)
+        assert.match(tile.style.backgroundSize, /px auto$/, 'partial sheets use their natural aspect ratio')
+    }
+    assert.match(tiles[0].style.backgroundImage, /thumbnails-02\.webp/, 'reuse the partial newest sheet')
+    assert.equal(tiles[0].style.backgroundPosition, '-0px -0px')
+    const offsets = tiles[1].style.backgroundPosition.split(' ').map(parseFloat)
+    assert.ok(Math.abs(offsets[0] + 888 * scale) < 1e-9)
+    assert.ok(Math.abs(offsets[1] + 666 * scale) < 1e-9)
+    ui.resolveClassifications({})
+    await flush()
+    ui.context.document.documentElement.scrollTop = 130 + 10 * 265
+    await updateViewport(ui)
+    assert.equal(thumbnailCount(ui), 10)
+    assert.match(ui.node.innerHTML, /-data-gallery-idx="18"/)
+    assert.doesNotMatch(ui.node.innerHTML, /-data-gallery-idx="0"/)
+    assert.equal(cardPositions(ui)[0][0], 9 * 265)
+})
+
+test('compact widths use whole-pixel thumbnails and centered gutters, falling back below 320px', async () => {
+    for (const [width, size, columns, gap] of [
+        [200, 192, 1, 7], [319, 220, 1, 7], [320, 152, 2, 7], [360, 172, 2, 7],
+        [375, 180, 2, 7], [376, 180, 2, 7], [390, 187, 2, 7], [414, 199, 2, 7],
+        [455, 220, 2, 7], [456, 220, 2, 8],
+    ]) {
+        const ui = gallery(false, [], manyEntries(6), 'localhost', { clientWidth: width })
+        await flush()
+        assert.equal(ui.node.style['--thumbnail-display-size'], `${size}px`, `width ${width}`)
+        const firstRow = cardPositions(ui).filter(([top]) => top === 0)
+        assert.equal(firstRow.length, columns, `width ${width}`)
+        const left = firstRow[0][1]
+        const right = width - firstRow.at(-1)[1] - size
+        assert.equal(left, right, 'center leftover space after rounding')
+        assert.ok(left >= 4)
+        if (columns === 2) assert.equal(firstRow[1][1] - left - size, gap)
+        const cardHeight = size + 70
+        const rowHeight = cardHeight + 15
+        assert.equal(ui.node.style['--gallery-card-height'], `${cardHeight}px`)
+        assert.equal(ui.node.style.height, `${Math.ceil(6 / columns) * rowHeight}px`)
+        const positions = cardPositions(ui)
+        assert.equal(positions[columns][0] - positions[0][0] - cardHeight, 15)
+        ui.resolveClassifications({})
+        await flush()
+    }
+})
+
+test('resizing between compact and full-size cards updates positions and sprite scale without stale styles', async () => {
+    const ui = gallery(false, [], manyEntries(6), 'localhost', { clientWidth: 375 })
+    await flush()
+    ui.resolveClassifications({})
+    await flush()
+    for (const [width, size, lefts] of [
+        [376, 180, [4.5, 191.5]], [456, 220, [4, 232]], [375, 180, [4, 191]],
+    ]) {
+        ui.node.clientWidth = width
+        await updateViewport(ui, 'resize')
+        assert.equal(ui.node.style['--thumbnail-display-size'], `${size}px`)
+        assert.deepEqual(cardPositions(ui).slice(0, 2).map(([, left]) => left), lefts)
+        const tile = ui.node.querySelectorAll('.thumbnail')[0]
+        if (size === 220) {
+            assert.equal(tile.style.backgroundSize, undefined, 'full-size sprite uses its natural dimensions')
+            assert.equal(tile.style.backgroundPosition, '-0px -222px')
+        } else {
+            assert.ok(Math.abs(parseFloat(tile.style.backgroundSize) - 1108 * size / 220) < 1e-9)
+        }
+        assert.equal(ui.node.style['--gallery-card-height'], `${size + 70}px`)
+        assert.equal(ui.node.style.height, `${3 * (size + 85)}px`, 'row spacing follows thumbnail size')
+        assert.equal(cardPositions(ui)[2][0], size + 85)
+    }
+})
+
+test('resizing a scrolled mobile gallery recalculates its visible window using the new row height', async () => {
+    const ui = gallery(false, [], manyEntries(100), 'localhost', { clientWidth: 375, innerHeight: 667 })
+    await flush()
+    ui.resolveClassifications({})
+    await flush()
+    ui.context.document.documentElement.scrollTop = 10 * 265
+    await updateViewport(ui)
+    assert.match(ui.node.innerHTML, /-data-gallery-idx="18"/)
+    assert.equal(cardPositions(ui)[0][0], 9 * 265)
+    ui.node.clientWidth = 414
+    await updateViewport(ui, 'resize')
+    assert.equal(ui.node.style['--thumbnail-display-size'], '199px')
+    assert.equal(ui.node.style['--gallery-card-height'], '269px')
+    assert.equal(ui.node.style.height, `${50 * 284}px`)
+    assert.match(ui.node.innerHTML, /-data-gallery-idx="16"/)
+    assert.equal(cardPositions(ui)[0][0], 8 * 284)
+    assert.equal(cardPositions(ui)[2][0] - cardPositions(ui)[0][0] - 269, 15)
+})
+
+test('compact original upgrades, filtering and failed sprites keep contain sizing instead of sprite scaling', async () => {
+    const ui = gallery(false, [], null, 'localhost', { clientWidth: 375 })
+    await flush()
+    const original = originalRequests(ui)[0]
+    original.onload()
+    await flush()
+    const upgraded = ui.node.querySelectorAll('.thumbnail').find(tile => tile.getAttribute('href') === original.src)
+    assert.equal(upgraded.style.backgroundSize, 'contain')
+    assert.equal(upgraded.style.backgroundPosition, 'center')
+    assert.equal(ui.node.style['--thumbnail-display-size'], '180px')
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'Sesamstraße' })
+    assert.equal(thumbnailCount(ui), 1)
+    assert.equal(ui.node.querySelectorAll('.thumbnail')[0].style.backgroundSize, 'contain')
+    assert.equal(ui.node.style['--thumbnail-display-size'], '180px')
+    assert.equal(ui.node.style['--gallery-card-height'], '250px')
+    assert.equal(ui.node.style.height, '265px')
+
+    for (const options of [{ webpSupported: false }, { imageLoad(image, src) {
+        if (src.startsWith('images/')) image.onerror()
+    } }]) {
+        const fallback = gallery(false, [], null, 'localhost', { clientWidth: 375, ...options })
+        await flush()
+        assert.equal(fallback.node.style['--thumbnail-display-size'], '180px')
+        assert.ok(fallback.node.querySelectorAll('.thumbnail').every(tile => tile.style.backgroundSize === 'contain'))
+        fallback.resolveClassifications({})
+        await flush()
+    }
 })
 
 function urlParams(ui) {
@@ -1499,11 +2054,11 @@ test('scroll position stays local to history and never appears in shared URLs', 
     const ui = gallery(false, [], entries)
     ui.resolveClassifications({})
     await flush()
-    ui.context.document.documentElement.scrollTop = 10 * 364
+    ui.context.document.documentElement.scrollTop = 10 * 305
     for (const handler of ui.listeners.scroll) handler({ type: 'scroll', constructor: { name: 'Event' } })
     assert.equal(urlParams(ui).get('scroll'), null)
     assert.equal(ui.context.location.href, 'http://localhost/')
-    assert.equal(ui.context.history.state.galleryScroll, 10 * 364)
+    assert.equal(ui.context.history.state.galleryScroll, 10 * 305)
     assert.equal(ui.context.history.entries.length, 1)
     const shared = gallery(false, [], entries, 'localhost', { query: new URL(ui.context.location.href).search })
     shared.resolveClassifications({})
@@ -1519,7 +2074,7 @@ test('scroll position stays local to history and never appears in shared URLs', 
             Math.max(0, parseInt(ui.node.style.height) - ui.context.innerHeight))
     }
     await ui.context.history.go(-1)
-    assert.equal(ui.context.document.documentElement.scrollTop, 10 * 364)
+    assert.equal(ui.context.document.documentElement.scrollTop, 10 * 305)
 })
 
 test('invalid numeric URL state and missing or excluded images degrade to usable gallery', async () => {

@@ -31,6 +31,8 @@ TAGS_REASONING_EFFORT = "medium"
 REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 API_URL = "https://api.openai.com/v1/responses"
 SCHEMA_VERSION = 8
+# Tag representation changes independently of the OCR/content schema.
+TAG_FORMAT_VERSION = 2
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 DEBUG_LOCK = threading.Lock()
 
@@ -54,7 +56,7 @@ CLASSIFICATION_SCHEMA = {
         "tags": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Concise search keywords or short phrases in German or English only; preserve proper names.",
+            "description": "Neutral/shared/unresolved search keywords in the current format; combined tags in legacy records.",
         },
         "image_type": {
             "type": "string",
@@ -80,16 +82,24 @@ CLASSIFICATION_SCHEMA = {
     "additionalProperties": False,
 }
 
-# The final, merged classification keeps the gallery/export schema unchanged.
+# Saved format 2 partitions neutral/German/English tags; legacy language lists are optional.
+TAG_FIELDS = ("tags", "tags_de", "tags_en")
+CLASSIFICATION_SCHEMA["properties"].update({
+    field: {"type": "array", "items": {"type": "string"}}
+    for field in ("tags_de", "tags_en")
+})
 CONTENT_SCHEMA = {
     **CLASSIFICATION_SCHEMA,
-    "properties": {key: value for key, value in CLASSIFICATION_SCHEMA["properties"].items() if key != "tags"},
-    "required": [key for key in CLASSIFICATION_SCHEMA["required"] if key != "tags"],
+    "properties": {key: value for key, value in CLASSIFICATION_SCHEMA["properties"].items() if key not in TAG_FIELDS},
+    "required": [key for key in CLASSIFICATION_SCHEMA["required"] if key not in TAG_FIELDS],
 }
 TAGS_SCHEMA = {
     "type": "object",
-    "properties": {"tags": CLASSIFICATION_SCHEMA["properties"]["tags"]},
-    "required": ["tags"],
+    "properties": {
+        "tags_de": {"type": "array", "items": {"type": "string"}, "description": "German search keywords; preserve proper names."},
+        "tags_en": {"type": "array", "items": {"type": "string"}, "description": "English equivalents; preserve proper names."},
+    },
+    "required": ["tags_de", "tags_en"],
     "additionalProperties": False,
 }
 
@@ -109,19 +119,20 @@ Include both "Stichwörter" (search keywords for the subject, theme or joke) and
 "Bildmerkmale" (distinctive visible image features, such as characters, objects,
 actions, expressions, composition or setting) in the tags list. Select features
 that help someone find this particular image; do not enumerate incidental details.
-Keep these as concise tags, not full sentences or separate output fields.
+Keep these as concise tags, not full sentences. Do not create separate fields
+for subject keywords and visual features; include both in each language list.
 Prefer specific, useful search terms over broad or redundant labels. Identify the
 actual subject or joke rather than mechanically tagging every incidental detail.
-Include both German and English equivalents in the same tags list: for every
-German tag, include its concise English translation; for every English tag,
-include its concise German translation. List the selected tags first, followed
-by their translations. Preserve meaning and specificity; do not add new topics,
-broader terms, speculative interpretations or unrelated synonyms in translations.
-Preserve proper names; do not invent translations of people's names. For names
-with conventional German/English equivalents, include the established equivalent
-(for example Sesamstraße / Sesame Street). Include unchanged names or words shared
-by both languages only once. Avoid case-insensitive duplicates and empty tags.
-Use an empty list if no meaningful tags can be identified.
+Return two separate lists: tags_de contains German search keywords and tags_en
+contains their concise English equivalents. Every subject and image feature must
+have an equivalent in both lists. Preserve meaning and specificity; do not add
+new topics, broader terms, speculative interpretations or unrelated synonyms in
+translations. Preserve proper names; do not invent translations of people's names.
+For names with conventional German/English equivalents, use the established
+respective name (for example Sesamstraße / Sesame Street). Put unchanged names
+and words suitable for both languages in BOTH lists, once per list.
+Avoid case-insensitive duplicates and empty tags within each list.
+Use two empty lists if no meaningful tags can be identified.
 """
 
 INSTRUCTIONS = """Analyze the supplied image for archival search and classification.
@@ -329,7 +340,7 @@ def image_data_url(data: bytes) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
 
 
-def validate_classification(result, schema=CLASSIFICATION_SCHEMA):
+def validate_classification(result, schema=CLASSIFICATION_SCHEMA, *, tag_format_version=0):
     """Validate responses and resume records, including semantic template invariants."""
     def check(value, schema):
         types = schema["type"]
@@ -346,7 +357,7 @@ def validate_classification(result, schema=CLASSIFICATION_SCHEMA):
         if "enum" in schema and value not in schema["enum"]:
             raise ClassificationError("classification has an invalid enum value")
         if isinstance(value, dict):
-            if set(value) != set(schema["required"]):
+            if not set(schema["required"]) <= set(value) <= set(schema["properties"]):
                 raise ClassificationError("classification has missing or unexpected fields")
             for key, child in value.items():
                 check(child, schema["properties"][key])
@@ -357,6 +368,20 @@ def validate_classification(result, schema=CLASSIFICATION_SCHEMA):
             raise ClassificationError("classification confidence must be between 0 and 1")
 
     check(result, schema)
+    if schema is CLASSIFICATION_SCHEMA:
+        split = {field for field in ("tags_de", "tags_en") if field in result}
+        if split and len(split) != 2:
+            raise ClassificationError("both tag language lists are required")
+        if tag_format_version >= 2:
+            if len(split) != 2:
+                raise ClassificationError("neutral tag format requires language lists")
+            groups = [{tag.strip().casefold() for tag in result[field]} for field in TAG_FIELDS]
+            if any(groups[i] & groups[j] for i in range(3) for j in range(i + 1, 3)):
+                raise ClassificationError("neutral and language tag lists must be disjoint")
+        else:
+            combined = {tag.strip().casefold() for tag in result["tags"]}
+            if any(tag.strip().casefold() not in combined for field in split for tag in result[field]):
+                raise ClassificationError("language tags must belong to combined tags")
     if "meme_template" not in result:
         return result
     template = result["meme_template"]
@@ -390,6 +415,11 @@ def normalize_tags(tags: list[str]) -> list[str]:
     return normalized
 
 
+def all_tags(result: dict) -> list[str]:
+    """Union for search/export checks, across legacy and neutral tag formats."""
+    return normalize_tags([tag for field in TAG_FIELDS for tag in result.get(field, [])])
+
+
 def classify(url: str, model: str, api_key: str, *, reasoning_effort: str | None = DEFAULT_REASONING_EFFORT, timeout: int, retries: int, debug: bool = False, image_path: pl.Path | None = None, mode: str = "full", previous: dict | None = None) -> dict:
     """Classify a remote image or a local original, retaining its canonical URL."""
     if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
@@ -400,9 +430,15 @@ def classify(url: str, model: str, api_key: str, *, reasoning_effort: str | None
     if mode == "tags" and previous is None:
         raise ClassificationError(f"--tags-only requires existing OCR/content for {url}; run --ocr-only or a full classification first")
     if previous is not None and mode == "tags":
-        validate_classification({**previous["classification"], "tags": previous["classification"].get("tags", [])})
+        validate_classification({**previous["classification"], "tags": previous["classification"].get("tags", [])},
+                                tag_format_version=previous.get("tag_format_version", 0))
     elif previous is not None and mode == "ocr":
-        validate_classification({"tags": previous["classification"].get("tags", [])}, TAGS_SCHEMA)
+        # Old content may be incomplete; validate only the tags being preserved.
+        preserved = {key: value for key, value in previous["classification"].items() if key in TAG_FIELDS}
+        validate_classification(preserved, {
+            "type": "object", "properties": {key: CLASSIFICATION_SCHEMA["properties"][key] for key in TAG_FIELDS},
+            "required": [], "additionalProperties": False,
+        })
     started = time.perf_counter()
     try:
         if image_path is None:
@@ -422,7 +458,7 @@ def classify(url: str, model: str, api_key: str, *, reasoning_effort: str | None
     merged = dict(previous or {})
     result = dict(merged.get("classification", {}))
     if mode == "ocr":
-        result = {"tags": result.get("tags", [])}
+        result = {key: value for key, value in result.items() if key in TAG_FIELDS}
     versions = stage_versions(previous)
     if mode != "tags":
         content, response = classify_response(
@@ -442,7 +478,13 @@ def classify(url: str, model: str, api_key: str, *, reasoning_effort: str | None
             name="image_tags", reasoning_effort=TAGS_REASONING_EFFORT,
             timeout=timeout, retries=retries, debug=debug, url=url,
         )
-        result["tags"] = normalize_tags(tag_result["tags"])
+        german = normalize_tags(tag_result["tags_de"])
+        english = normalize_tags(tag_result["tags_en"])
+        shared = {tag.casefold() for tag in german} & {tag.casefold() for tag in english}
+        result["tags"] = [tag for tag in german if tag.casefold() in shared]
+        result["tags_de"] = [tag for tag in german if tag.casefold() not in shared]
+        result["tags_en"] = [tag for tag in english if tag.casefold() not in shared]
+        merged["tag_format_version"] = TAG_FORMAT_VERSION
         merged["tags_call"] = response_metadata(tag_response, TAGS_MODEL, TAGS_REASONING_EFFORT)
         # Keep the legacy field readable, but translations now belong to tags_call.
         merged["translation_call"] = None
@@ -451,7 +493,7 @@ def classify(url: str, model: str, api_key: str, *, reasoning_effort: str | None
         result.setdefault("tags", [])
         merged.setdefault("tags_call", None)
         merged.setdefault("translation_call", None)
-    validate_classification(result)
+    validate_classification(result, tag_format_version=merged.get("tag_format_version", 0))
     merged.update({
         "url": url,
         "schema_version": min(versions.values()),
@@ -557,8 +599,14 @@ def latest_records(path: pl.Path) -> dict[str, dict]:
                         or any(type(v) is not int or v < 0 for v in versions.values())
                         or "stage_schema_versions" in record and min(versions.values()) != version):
                     raise ValueError("invalid stage schema versions")
-                if version >= SCHEMA_VERSION or "stage_schema_versions" in record:
-                    validate_classification(record["classification"])
+                if version >= SCHEMA_VERSION or "stage_schema_versions" in record or "tag_format_version" in record:
+                    validate_classification(record["classification"], tag_format_version=record.get("tag_format_version", 0))
+                if "tag_format_version" in record:
+                    if type(record["tag_format_version"]) is not int or record["tag_format_version"] < 0:
+                        raise ValueError("invalid tag format version")
+                    if record["tag_format_version"] >= 1 and not all(
+                            key in record["classification"] for key in ("tags_de", "tags_en")):
+                        raise ValueError("tag format version requires language lists")
                 for key in ("tags_call", "translation_call"):
                     if record.get(key) is not None and not isinstance(record[key], dict):
                         raise ValueError(f"invalid {key} metadata")
@@ -583,7 +631,9 @@ def record_complete(record: dict, model: str, reasoning_effort, *, mode="full", 
     tags_call = record.get("tags_call") or {}
     tags_complete = (tags_call.get("model") == TAGS_MODEL
                      and tags_call.get("reasoning_effort") == TAGS_REASONING_EFFORT
-                     and record.get("translation_call") is None)
+                     and record.get("translation_call") is None
+                     and record.get("tag_format_version", 0) >= TAG_FORMAT_VERSION
+                     and all(key in record["classification"] for key in ("tags_de", "tags_en")))
     return content_complete if mode == "ocr" else tags_complete if mode == "tags" else content_complete and tags_complete
 
 
@@ -619,7 +669,8 @@ def require_content(urls, records: dict):
         raise ClassificationError(f"--tags-only: {len(missing)} selected images lack saved OCR/content (first: {missing[0]}); run --ocr-only or full classification first")
     for url in urls:
         result = records[url]["classification"]
-        validate_classification({**result, "tags": result.get("tags", [])})
+        validate_classification({**result, "tags": result.get("tags", [])},
+                                tag_format_version=records[url].get("tag_format_version", 0))
 
 
 def forecast(count: int, records: dict, args) -> dict:
@@ -679,11 +730,12 @@ def report_progress(url: str, succeeded: int, failed: int, total: int):
               file=sys.stderr, flush=True)
 
 
-def classify_many(urls, classify_one, concurrency: int):
+def classify_many(urls, classify_one, concurrency: int, *, stop_on_error: bool = False):
     """Bound both workers and queued work; yield completions to the sole writer.
 
     On fatal configuration/discovery errors, cancel unstarted jobs and drain
     running jobs before raising, so already-paid successes can be checkpointed.
+    With stop_on_error, any job failure also stops submission and drains active work.
     """
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
@@ -717,6 +769,9 @@ def classify_many(urls, classify_one, concurrency: int):
                     fatal = fatal or exc
                     exhausted = True
                 except (ClassificationError, OSError, ValueError) as exc:
+                    if stop_on_error:
+                        fatal = fatal or exc
+                        exhausted = True
                     yield url, None, exc
                 else:
                     yield url, record, None

@@ -1,5 +1,7 @@
 *.session
 sync.log
+/images/classifications.jsonl
+/images/tag_language_cache.jsonl
 *.pyc
 scripts/telegram_backfill_state.json
 scripts/telegram_backfill_state.json.tmp

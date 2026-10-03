@@ -27,7 +27,7 @@ const GALLERY_STATE = {
     'dirNames': null, // [dirName, ....]
     'telegramMetadata': {}, // {filename: [messageId, reactionCount, views, comments], ...}
     'telegramStatus': 'loading',
-    'classificationIndex': {}, // {"YYYY/MM/filename": {tags, template}}
+    'classificationIndex': {}, // {"YYYY/MM/filename": {tags, tags_de?, tags_en?, tag_format_version?, template}}
     'classificationStatus': 'loading',
     'classificationTextIndex': {}, // {"YYYY/MM/filename": {text, description}}
     'classificationTextStatus': 'loading',
@@ -130,6 +130,7 @@ async function restoreNavigation(navigation) {
     appliedSearch = navigation.search
     document.getElementById('filter-reactions').value = navigation.minReactions
     document.getElementById('filter-search').value = navigation.search
+    updateSearchControl()
     GALLERY_STATE.filters = {
         minReactions: navigation.minReactions,
         template: navigation.template,
@@ -316,7 +317,7 @@ function tagKey(tag) {
     return tag.trim().toLowerCase()
 }
 
-// Tags have no language metadata. Only recognize clear English vocabulary;
+// Compatibility fallback for legacy tags without language metadata. Recognize English vocabulary;
 // shared words (meme, comic, satire, humor, etc.) and unrecognized names stay inline.
 // This is a display hint, never a change to the classification/search data.
 const ENGLISH_TAG_WORDS = new Set((
@@ -340,11 +341,24 @@ function isClearlyEnglishTag(tag) {
     return tagKey(tag).split(/[^a-z]+/).some(word => ENGLISH_TAG_WORDS.has(word))
 }
 
+function classificationTags(classification) {
+    if (!classification) return []
+    if (!(classification.tag_format_version >= 2)) return classification.tags || []
+    const seen = new Set()
+    return ['tags', 'tags_de', 'tags_en'].flatMap(field => classification[field] || [])
+        .filter(tag => {
+            const key = tagKey(tag)
+            if (!key || seen.has(key)) return false
+            seen.add(key)
+            return true
+        })
+}
+
 function countCatalogTags(index) {
     const counts = new Map()
     for (const classification of Object.values(index)) {
         // Count images, not duplicate tags within the same image.
-        for (const key of new Set(classification.tags.map(tagKey))) {
+        for (const key of new Set(classificationTags(classification).map(tagKey))) {
             if (key) counts.set(key, (counts.get(key) || 0) + 1)
         }
     }
@@ -362,14 +376,23 @@ function classificationHTML(classification, imageId) {
     const template = (GALLERY_STATE.templateCounts.get(classification.template) || 0) > 1
         ? `<button type="button" data-template="${escapeHtml(classification.template)}" title="${escapeHtml(classification.template)}" aria-label="${escapeHtml(classification.template)}" class="classification-tag meme-template">${escapeHtml(templateLabel(classification.template))}</button>`
         : ''
+    // Explicit language lists take precedence, including an explicitly empty list.
+    // Neutral tags (shared/unresolved) are inline too in format 2. Legacy format 1
+    // still has combined tags, so only its explicit German membership is inline.
+    const germanTags = Array.isArray(classification.tags_de)
+        ? new Set([...classification.tags_de,
+            ...(classification.tag_format_version >= 2 ? classification.tags : [])].map(tagKey)) : null
+    const overlayOnly = tag => germanTags !== null
+        ? !germanTags.has(tagKey(tag)) : isClearlyEnglishTag(tag)
     const frequency = tag => GALLERY_STATE.tagCounts.get(tagKey(tag)) || 0
-    const sortedTags = [...classification.tags]
+    const allTags = classificationTags(classification)
+    const sortedTags = [...allTags]
         .sort((a, b) => frequency(b) - frequency(a) || a.localeCompare(b, 'de'))
     const tags = sortedTags
-        .map(tag => `<button type="button" class="classification-tag"${isClearlyEnglishTag(tag) ? ' data-overlay-only="true"' : ''}>${escapeHtml(tag)}</button>`)
+        .map(tag => `<button type="button" class="classification-tag"${overlayOnly(tag) ? ' data-overlay-only="true"' : ''}>${escapeHtml(tag)}</button>`)
         .join('')
     return `<div class="thumbnail-classification">` +
-        (template || classification.tags.length ?
+        (template || allTags.length ?
             `<div class="classification-tags" role="group" aria-label="Vorlage und Schlagwörter zum Bild">${template}${tags}` +
             `<button type="button" class="classification-more" data-image-id="${escapeHtml(imageId)}" aria-label="Weitere Schlagwörter anzeigen" title="Weitere Schlagwörter anzeigen" aria-haspopup="dialog" aria-expanded="false" hidden>+0</button></div>` : '') +
         '</div>'
@@ -602,7 +625,21 @@ async function loadAllItems() {
 }
 
 function normalizeSearch(value) {
-    return value.replace(/\s+/g, ' ').trim().toLowerCase()
+    return value.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase()
+        .replace(/[äöü]/g, char => ({ ä: 'a', ö: 'o', ü: 'u' })[char])
+}
+
+function matchesSearch(value, search) {
+    const text = normalizeSearch(value)
+    if (text.includes(search)) return true
+    const escapeRegex = char => char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const punctuation = [...new Set(search.match(/\p{P}/gu) || [])].map(escapeRegex).join('|')
+    // Keep punctuation named in the query literal; ignore all other punctuation.
+    const ignored = punctuation ? `(?!(?:${punctuation}))\\p{P}` : '\\p{P}'
+    // Punctuation can separate words or join letters, but real spaces stay significant.
+    const pattern = [...search].map(char => char === ' '
+        ? `(?:\\s|${ignored})+` : escapeRegex(char)).join(`(?:${ignored})*`)
+    return new RegExp(pattern, 'u').test(text)
 }
 
 function matchesFilters(item) {
@@ -612,19 +649,27 @@ function matchesFilters(item) {
     if (filters.template && classification?.template !== filters.template) return false
     if (filters.search) {
         const details = GALLERY_STATE.classificationTextIndex[item.imageId]
-        const text = normalizeSearch([details?.text, details?.description,
-            classification?.template, ...(classification?.tags || [])].filter(Boolean).join(' '))
-        if (!text.includes(filters.search)) return false
+        const text = [details?.text, details?.description,
+            classification?.template, ...classificationTags(classification)].filter(Boolean).join(' ')
+        if (!matchesSearch(text, filters.search)) return false
     }
     return true
 }
 
+function updateSearchControl() {
+    const hasValue = document.getElementById('filter-search').value !== ''
+    document.getElementById('filter-search-clear').hidden = !hasValue
+    document.getElementById('filter-search-icon').hidden = hasValue
+}
+
 function searchInputHandler() {
+    updateSearchControl()
     clearTimeout(GALLERY_STATE.searchDebounceTimeout)
     GALLERY_STATE.searchDebounceTimeout = setTimeout(filterChangeHandler, 200)
 }
 
 function filterChangeHandler() {
+    updateSearchControl()
     closeTagOverlay()
     // Other controls and tag clicks apply the current search immediately too.
     clearTimeout(GALLERY_STATE.searchDebounceTimeout)
@@ -898,7 +943,7 @@ function showTagOverlay(trigger, event) {
     const template = classification.template
         ? `<button type="button" class="classification-tag meme-template" data-template="${escapeHtml(classification.template)}">${escapeHtml(classification.template)}</button>` : ''
     overlay.innerHTML = '<button type="button" class="tags-overlay-close" aria-label="Schließen">×</button>' +
-        '<div class="tags-overlay-list">' + template + classification.tags.map(tag =>
+        '<div class="tags-overlay-list">' + template + classificationTags(classification).map(tag =>
             `<button type="button" class="classification-tag">${escapeHtml(tag)}</button>`).join('') + '</div>'
     document.body.appendChild(overlay)
     tagOverlay = overlay
@@ -908,13 +953,14 @@ function showTagOverlay(trigger, event) {
     const anchor = trigger.getBoundingClientRect()
     const x = event.detail !== 0 && Number.isFinite(event.clientX) ? event.clientX : anchor.right
     const groupTop = trigger.closest('.classification-tags').getBoundingClientRect().top
-    const bounds = overlay.getBoundingClientRect()
     const width = document.documentElement.clientWidth || window.innerWidth
     const height = document.documentElement.clientHeight || window.innerHeight
+    // Size against the full viewport before measuring, not the space below the tags.
+    overlay.style.maxWidth = Math.max(0, width - 16) + 'px'
+    overlay.style.maxHeight = Math.max(0, Math.min(250, height - 16)) + 'px'
+    const bounds = overlay.getBoundingClientRect()
     overlay.style.left = Math.max(8, Math.min(x + 12, width - bounds.width - 8)) + 'px'
-    const top = Math.max(8, Math.min(groupTop, height - 8))
-    overlay.style.top = top + 'px'
-    overlay.style.maxHeight = Math.min(360, height - top - 8) + 'px'
+    overlay.style.top = Math.max(8, Math.min(groupTop, height - bounds.height - 8)) + 'px'
     overlay.querySelector('.classification-tag, .tags-overlay-close').focus({ preventScroll: true })
 }
 
@@ -998,7 +1044,7 @@ function galleryClickHandler(evt) {
             control.insertAdjacentHTML('beforeend', templateOptionHTML(value, count))
         }
         control.value = value
-        control.focus()
+        if (isTemplate) control.focus()
         filterChangeHandler()
         return false
     }
@@ -1055,6 +1101,10 @@ function initHandlers() {
         document.getElementById(id).addEventListener('input', filterChangeHandler)
     }
     document.getElementById('filter-search').addEventListener('input', searchInputHandler)
+    document.getElementById('filter-search-clear').addEventListener('click', () => {
+        document.getElementById('filter-search').value = ''
+        filterChangeHandler()
+    })
     window.addEventListener('scroll', updateGalleryHandler)
     window.addEventListener('resize', updateGalleryHandler)
     window.addEventListener('click', galleryClickHandler)

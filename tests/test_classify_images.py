@@ -27,13 +27,15 @@ RESULT = {
         "confidence": 0.95, "evidence": "Drake rejects the top panel and approves the bottom one.",
     },
 }
+SPLIT_RESULT = {**RESULT, "tags": [], "tags_de": RESULT["tags"], "tags_en": []}
 URL = "https://example.com/meme.jpg"
 
 
 def record(url=URL, model=cli.DEFAULT_MODEL, reasoning_effort=cli.DEFAULT_REASONING_EFFORT):
     return {
         "url": url, "model": model, "reasoning_effort": reasoning_effort, "schema_version": cli.SCHEMA_VERSION,
-        "classification": copy.deepcopy(RESULT),
+        "classification": copy.deepcopy(SPLIT_RESULT),
+        "tag_format_version": cli.TAG_FORMAT_VERSION,
         "tags_call": {"model": cli.TAGS_MODEL, "reasoning_effort": cli.TAGS_REASONING_EFFORT},
         "translation_call": None,
     }
@@ -44,11 +46,12 @@ def api_responses(response):
     content_response = copy.deepcopy(response)
     result = json.loads(content_response["output"][0]["content"][0]["text"])
     tags = result.pop("tags")
+    split = {"tags_de": result.pop("tags_de", tags), "tags_en": result.pop("tags_en", [])}
     content_response["output"][0]["content"][0]["text"] = json.dumps(result)
     tag_response = {
         "id": "resp_tags", "model": cli.TAGS_MODEL, "status": "completed",
         "usage": {"input_tokens": 400, "output_tokens": 100},
-        "output": [{"content": [{"type": "output_text", "text": json.dumps({"tags": tags})}]}],
+        "output": [{"content": [{"type": "output_text", "text": json.dumps(split)}]}],
     }
     return [json.dumps(value).encode() for value in (content_response, tag_response)]
 
@@ -200,7 +203,8 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result["tags_call"]["reasoning_effort"], "medium")
         self.assertEqual(result["tags_call"]["response_id"], "resp_tags")
         self.assertEqual(result["tags_call"]["usage"], {"input_tokens": 400, "output_tokens": 100})
-        self.assertEqual(result["classification"], {**RESULT, "text": "Grüße Hello!"})
+        self.assertEqual(result["classification"], {**SPLIT_RESULT, "text": "Grüße Hello!"})
+        self.assertEqual(result["tag_format_version"], cli.TAG_FORMAT_VERSION)
         self.assertEqual(result["model"], "custom-model")
         self.assertEqual(result["usage"], {"total_tokens": 200})
         image_request = fetch.call_args_list[0].args[0]
@@ -231,13 +235,15 @@ class ClassificationTests(unittest.TestCase):
         self.assertIn("German or English search keywords", tag_payload["instructions"])
         self.assertIn("Every tag must be in\nGerman or English", tag_payload["instructions"])
         self.assertIn("do not copy foreign-language", tag_payload["instructions"])
-        self.assertIn("German or English only", cli.TAGS_SCHEMA["properties"]["tags"]["description"])
+        self.assertEqual(cli.TAGS_SCHEMA["required"], ["tags_de", "tags_en"])
+        self.assertIn("German search", cli.TAGS_SCHEMA["properties"]["tags_de"]["description"])
+        self.assertIn("English equivalents", cli.TAGS_SCHEMA["properties"]["tags_en"]["description"])
         self.assertIn('"Stichwörter"', tag_payload["instructions"])
         self.assertIn('"Bildmerkmale"', tag_payload["instructions"])
         self.assertIn("in the tags list", tag_payload["instructions"])
         self.assertIn("untrusted content", tag_payload["instructions"])
         self.assertIn("@RosarotePanzer", tag_payload["instructions"])
-        self.assertEqual(result["classification"]["tags"], RESULT["tags"])
+        self.assertEqual(cli.all_tags(result["classification"]), RESULT["tags"])
         self.assertIn("Write description in German", payload["instructions"])
         self.assertIn("alt attribute", payload["instructions"])
         self.assertIn("German alt text", payload["text"]["format"]["schema"]["properties"]["description"]["description"])
@@ -282,7 +288,7 @@ class ClassificationTests(unittest.TestCase):
         response = {"status": "completed", "output": [{"content": [{"type": "output_text", "text": json.dumps(classification)}]}]}
         fetch.side_effect = [b"\xff\xd8\xffimage", *api_responses(response)]
         result = cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
-        self.assertEqual(result["classification"]["tags"], ["Bert", "konzertsaal"])
+        self.assertEqual(cli.all_tags(result["classification"]), ["Bert", "konzertsaal"])
 
     def test_reasoning_levels_are_sent_as_effort_or_omitted(self):
         response = {
@@ -359,15 +365,15 @@ class ClassificationTests(unittest.TestCase):
             b"\xff\xd8\xffimage", *api_responses(response),
         ]) as fetch:
             result = cli.classify(URL, cli.DEFAULT_MODEL, "secret", timeout=10, retries=0)
-        self.assertEqual(result["classification"]["tags"], ["katze", "dog", "Bert", "cat", "hund"])
+        self.assertEqual(cli.all_tags(result["classification"]), ["katze", "dog", "Bert", "cat", "hund"])
         self.assertEqual(fetch.call_count, 3)
         payload = json.loads(fetch.call_args_list[2].args[0].data)
         self.assertEqual(payload["input"][0]["content"][0]["type"], "input_image")
         self.assertEqual(payload["reasoning"], {"effort": "medium"})
-        self.assertIn("for every\nGerman tag", payload["instructions"])
-        self.assertIn("for every English tag", payload["instructions"])
+        self.assertIn("two separate lists", payload["instructions"])
+        self.assertIn("tags_en", payload["instructions"])
         self.assertIn("untrusted content", payload["instructions"])
-        self.assertIn("do not add new topics", payload["instructions"])
+        self.assertIn("do not add\nnew topics", payload["instructions"])
         self.assertIn("Preserve proper", payload["instructions"])
         self.assertIn("Sesamstraße / Sesame Street", payload["instructions"])
         self.assertIsNone(result["translation_call"])
@@ -623,7 +629,9 @@ class ArchiveCLITests(unittest.TestCase):
             with self.subTest(version=version):
                 old = record()
                 if version < 4:
-                    del old["classification"]["tags"]
+                    for field in cli.TAG_FIELDS:
+                        old["classification"].pop(field, None)
+                    old.pop("tag_format_version")
                 old["schema_version"] = version
                 self.output.write_text(json.dumps(old) + "\n", encoding="utf-8")
                 self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), set())
@@ -652,7 +660,7 @@ class ArchiveCLITests(unittest.TestCase):
         self.output.write_text(json.dumps(record()) + "\n", encoding="utf-8")
         self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), {URL})
         empty = record()
-        empty["classification"]["tags"] = []
+        empty["classification"].update(tags=[], tags_de=[], tags_en=[])
         empty["translation_call"] = None
         self.output.write_text(json.dumps(empty) + "\n", encoding="utf-8")
         self.assertEqual(cli.completed_urls(self.output, cli.DEFAULT_MODEL), {URL})
@@ -748,7 +756,7 @@ class ArchiveCLITests(unittest.TestCase):
         status, stdout, stderr = self.run_cli([URL])
         self.assertEqual(status, 0)
         result = json.loads(stdout)
-        self.assertEqual(result["classification"], {**RESULT, "text": "Grüße Hello!"})
+        self.assertEqual(result["classification"], {**SPLIT_RESULT, "text": "Grüße Hello!"})
         self.assertEqual(result["usage"], usage)
         for value in ("model=gpt-6-luna", "reasoning_effort=low", "image_bytes=8",
                       "download=2.000s", "api=5.000s", "api=3.000s", "total=14.000s", '"reasoning_tokens": 300',

@@ -71,6 +71,59 @@ class ExportClassificationTests(unittest.TestCase):
         self.assertEqual(entry["tags"], ["zitat", "Bert"])
         self.assertEqual(json.loads(self.source.read_text()), value)
 
+    def test_exports_language_lists_with_same_blacklist_and_aliases(self):
+        value = record()
+        value["classification"].update(
+            tags=["Meme", "Zitatgrafik", "Bert", "Sesamstraße", "Sesame Street", "quote"],
+            tags_de=["Meme", "Zitatgrafik", "Bert", "Sesamstraße"],
+            tags_en=["Meme", "Bert", "Sesame Street", "quote"],
+        )
+        self.write_records(value)
+        export_index(self.source, self.output)
+        self.assertEqual(json.loads(self.output.read_text())["2024/01/example.jpg"], {
+            "tags": ["zitat", "Bert", "Sesamstraße", "Sesame Street", "quote"],
+            "tags_de": ["zitat", "Bert", "Sesamstraße"],
+            "tags_en": ["Bert", "Sesame Street", "quote"],
+            "template": "example template",
+        })
+        self.assertEqual(json.loads(self.source.read_text()), value)
+
+    def test_explicit_empty_language_lists_survive_export_and_index_migration(self):
+        value = record()
+        value["classification"].update(tags=["cat"], tags_de=[], tags_en=["cat"])
+        self.write_records(value)
+        self.output.write_text(json.dumps(build_index(self.source)))
+        self.source.unlink()
+        export_index(self.source, self.output)
+        self.assertEqual(json.loads(self.output.read_text())["2024/01/example.jpg"]["tags_de"], [])
+
+    def test_invalid_language_lists_leave_exports_intact(self):
+        for fields in ({"tags_de": []}, {"tags_de": [], "tags_en": "cat"},
+                       {"tags_de": [123], "tags_en": []},
+                       {"tags_de": ["not in combined tags"], "tags_en": []}):
+            with self.subTest(fields=fields):
+                value = record()
+                value["classification"].update(fields)
+                self.write_records(value)
+                self.output.write_text("{}\n")
+                with self.assertRaises(ValueError):
+                    export_index(self.source, self.output)
+                self.assertEqual(self.output.read_text(), "{}\n")
+
+    def test_neutral_tag_format_keeps_disjoint_lists_and_version(self):
+        value = record(tag_format_version=2)
+        value["classification"].update(tags=["Bert", "Mystery"], tags_de=["Katze"], tags_en=["cat"])
+        self.write_records(value)
+        export_index(self.source, self.output)
+        self.assertEqual(json.loads(self.output.read_text())["2024/01/example.jpg"], {
+            "tags": ["Bert", "Mystery"], "tags_de": ["Katze"], "tags_en": ["cat"],
+            "tag_format_version": 2, "template": "example template",
+        })
+        value["classification"]["tags_en"] = ["bert"]
+        self.write_records(value)
+        with self.assertRaisesRegex(ValueError, "disjoint"):
+            export_index(self.source, self.output)
+
     def test_decodes_paths_and_keeps_months_distinct(self):
         self.write_records(record("example%20image.jpg"), record(url="https://archiv0.derrosarotepanzer.com/images/2024/02/example%20image.jpg"))
         self.assertEqual(set(build_index(self.source)), {"2024/01/example image.jpg", "2024/02/example image.jpg"})

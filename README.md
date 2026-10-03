@@ -667,11 +667,11 @@ full-resolution images (not thumbnail sheets). `--month YYYY/MM` is repeatable;
 `--dir-index PATH` selects another directory index. Supported inputs are JPEG,
 PNG, WebP and non-animated GIF, up to 20 MiB each.
 
-Results include OCR `text`, `languages`, `tags`, `image_type`, a concise factual German
+Results include OCR `text`, `languages`, `tags`, `tags_de`, `tags_en`, `image_type`, a concise factual German
 `description` suitable for the image's `alt` attribute, and a `meme_template` with `status` (`recognized`, `unknown`, or `none`), nullable `name`,
 confidence and visual evidence. OCR and template matches are model predictions
 and can be wrong; `unknown` avoids forcing a guessed template name.
-`tags` is a list of concise German or English search keywords or short phrases for supported
+Classification tags are concise German or English search keywords or short phrases for supported
 subjects, characters, objects, settings, formats and themes. Other-language
 keywords are translated into German or English, regardless of the image's text
 language. Proper names are
@@ -680,12 +680,34 @@ predicted independently of Luna's OCR/template output, with a tags-only prompt
 that explicitly requests both **Stichwörter** (subject/theme/joke keywords) and
 **Bildmerkmale** (distinctive visible features) as concise entries in the same tags
 list, favoring useful search terms over incidental details. The same image-based
-Luna call generates counterpart translations: German tags gain English equivalents,
-and English tags gain German equivalents. The prompt requests original tags first,
-followed by translations; the result receives case-insensitive deduplication and
-watermark removal. The prompt forbids adding new topics and inventing translations of proper
-names. For example:
-`["Ernie", "Bert", "Sesamstraße", "konzertsaal", "meme", "Sesame Street", "concert hall"]`.
+Luna call returns **two explicit language lists**, `tags_de` and `tags_en`, with
+German keywords and their English equivalents. Both lists receive case-insensitive
+deduplication and watermark removal. Shared terms and unchanged proper names belong
+to both API lists; established translations use their respective language's name.
+For saved results, terms present in both languages are moved into the neutral `tags`
+list, leaving German-only `tags_de` and English-only `tags_en`. During backfill,
+uncertain or uncached terms also go into neutral `tags`, without guessing a language.
+The three lists are disjoint. Search, catalog counts and the full overlay use their
+deduplicated union; thumbnails show `tags_de` plus neutral `tags`.
+The prompt forbids adding new topics
+and inventing translations of proper names. For example:
+
+```json
+{
+  "tags_de": ["Sesamstraße", "konzertsaal"],
+  "tags_en": ["Sesame Street", "concert hall"],
+  "tags": ["Bert"]
+}
+```
+
+Language lists are optional when reading older saved classifications. New tag
+results record `tag_format_version: 2` independently of the content/stage schema
+(still 8). Format 0/1 records with combined `tags` remain readable; the exporter and
+UI distinguish their old semantics from format 2's neutral tags. Strict tag/full
+resume requires the current format; OCR-only resume is unchanged.
+`--min-schema` remains an explicit override accepting legacy combined tags, and
+normal ingest still preserves every existing record. OCR-only updates preserve
+all saved tag lists and their format marker; tag-only updates replace all three lists.
 
 Archive results are appended to `images/classifications.jsonl` (override with
 `--output PATH`). Each record includes its source URL, model, `reasoning_effort`,
@@ -697,7 +719,7 @@ metadata remains readable and is preserved by OCR-only updates. The merged
 `classification` fields remain compatible with the gallery and index exporter.
 Completed records are flushed immediately. Standalone strict resume skips records
 using the same content/tag models, reasoning efforts and schema with no separate
-translation call, unless `--min-schema` supplies an explicit
+translation call and with the current split-tag format, unless `--min-schema` supplies an explicit
 acceptance threshold; partial runs check only their selected stage. `--force`
 appends new classifications instead. Without `--min-schema`, changing the model or
 reasoning effort reclassifies the affected stage(s). Resume still reads legacy `thinking` fields
@@ -719,6 +741,80 @@ and `--retries` to adjust network behavior. Downloaded image bytes are sent to
 OpenAI, with response storage disabled (`store: false`); images are not saved
 locally by this script.
 
+### Backfilling tag languages without reclassifying images
+
+`scripts/backfill_tag_languages.py` splits the latest existing tags using a reusable
+case-normalized language lookup. It never downloads images or rewrites OCR.
+The default/`--dry` mode is read-only; `--label` explicitly opts into **paid text-only
+API calls** and `--apply` separately appends partitioned classifications without API
+calls. No monthly `entry_index.json` files are changed.
+
+```bash
+# Preview distinct tags and request counts, without API calls or writes.
+uv run --script scripts/backfill_tag_languages.py --dry
+
+# Paid pilot: label at most 100 distinct tags, using Luna/low by default.
+uv run --script scripts/backfill_tag_languages.py --label --limit 100
+
+# Resume paid text-only labeling; cache each validated batch immediately.
+uv run --script scripts/backfill_tag_languages.py --label
+
+# Retry missing/conflicting/failed tags after the pass, using smaller batches if needed.
+# Existing cached labels are skipped; no repeated calls for the successful tags.
+uv run --script scripts/backfill_tag_languages.py --label --batch-size 20
+
+# Inspect counts and uncertain tags before applying the migration.
+uv run --script scripts/backfill_tag_languages.py --dry --report /tmp/tag-language-report.json
+
+# Apply without review: shared/uncertain/uncached tags go into neutral tags.
+uv run --script scripts/backfill_tag_languages.py --apply
+# Optional reviewed labels can still be supplied with --overrides PATH.
+make classification-index
+```
+
+Default paths are `images/classifications.jsonl` (`--input`) and
+`images/tag_language_cache.jsonl` (`--cache`). The cache is append-only, with batch
+API diagnostics and labels `de`, `en`, `both` (shared words/names), or `unknown`.
+Reviewed `--overrides` take precedence. `--retry-unknown` explicitly retries uncertain
+labels during `--label`; otherwise only uncached tags incur new calls. `--batch-size`
+(default 40) and `--concurrency` (default 8) control tags per call and maximum
+simultaneous text calls. `--limit` (tags, not images), `--model`, `--reasoning-effort`,
+`--timeout` and `--retries` further bound/configure labeling. Use `--concurrency 1`
+for sequential processing, or lower concurrency if API rate limits cause retries.
+Only a bounded set of batches is submitted; the main thread caches results in
+completion order and updates progress/cost totals. Isolated request/response failures
+are reported without stopping later batches. For well-formed partial responses, only
+exact requested tags with unambiguous labels are cached: agreeing duplicate rows
+are accepted, conflicting duplicates remain pending, and unexpected/rewritten tags
+are ignored. Missing tags are not guessed. Even an empty usable result retains the
+response's usage metadata in the cache. Malformed or incomplete responses are discarded.
+
+After all scheduled batches finish, the pass reports attempted/cached tag counts and
+exits 1 if any batches failed or returned incomplete coverage (not an early abort).
+Rerun `--label` to retry only remaining uncached tags, optionally with `--batch-size 20`;
+repeat `--retry-unknown` if uncertain cached labels should also be retried.
+`--report` includes the pass counts and the remaining missing/uncertain tag lists.
+Authentication/model-configuration errors and interruption still stop new submissions
+and drain successful in-flight work before exit. Cache write failures remain fatal.
+
+Returned token costs are reported per batch with a running total for the current run
+(excluding previously cached batches). Partial responses count their full returned
+usage, not just the labels accepted. If a batch cost is unavailable (including failed
+requests without accessible usage), the total is marked as known costs only.
+Retries can incur additional charges. Tags are treated as untrusted text.
+
+Missing/uncertain labels do **not** block migration: shared (`both`), uncertain
+(`unknown`) and uncached tags go into neutral `tags`. Only `de`/`en` labels populate
+`tags_de`/`tags_en`. `--report PATH` still lists missing/uncertain labels for optional
+review, but all pending records are ready to apply. `--apply` upgrades legacy combined
+records (including format 1) to format 2; existing format-2 records are skipped, so
+applying again is idempotent. The union of all original tags, content, model/usage
+metadata, `classified_at` and stage versions are preserved; a separate
+`tag_language_backfill` object records migration time and the neutral unresolved
+policy. No translations or new tags are invented, and no paid calls are needed to apply.
+Do not run concurrent writers against the same input/cache, and repair a truncated
+JSONL tail before resuming. Regenerate the gallery classification index after applying.
+
 ### Classification metadata in the gallery
 
 ```bash
@@ -730,7 +826,8 @@ make html
 
 `scripts/export_classifications.py` reads `images/classifications.jsonl` and writes
 two indexes, keyed by archive-relative image paths: `images/classification_index.json`
-contains only tags and template names; `images/classification_text_index.json` contains
+contains neutral `tags`, `tags_de`/`tags_en`, a tag-format marker and template names
+(or legacy combined tags for older records); `images/classification_text_index.json` contains
 OCR text and descriptions. The last appended result for each image wins. Neither
 index includes API diagnostics or classification history.
 Generic tags `memes`, `meme`, `ausdruck`, `gesichtsausdruck` and `text-meme` are
@@ -788,11 +885,13 @@ also dismiss it. The image metadata debug button is disabled by default; add
 `debug=1` to the query string to enable it on any host. Tag frequencies are counted once after loading,
 case-insensitively and once per classified image across the entire catalog.
 Thumbnail tags are ordered most-common-first (alphabetically on ties). All tags,
-including those used in only one image, are eligible for display. A conservative
-JavaScript vocabulary heuristic makes clearly English tags overlay-only, counting
-them in `+N` even when there is no spatial overflow. It needs no reclassification
-or language service; ambiguous/shared vocabulary stays eligible for inline display.
-Templates are not language-filtered. All tags remain in the overlay and searchable,
+including those used in only one image, are eligible for display if they belong to
+`tags_de` or neutral `tags` (shared/unresolved). English-only tags are overlay-only
+and count in `+N` even without spatial
+overflow. Empty German and neutral lists show no inline tags. For older records
+without language lists, the conservative JavaScript vocabulary heuristic remains
+a temporary fallback until migration; ambiguous/shared vocabulary stays eligible.
+Templates are not language-filtered. All combined tags remain in the overlay and searchable,
 and available space limits which other tags are shown. Descriptions provide thumbnail tooltips and
 accessible labels. Images without results are marked “Not classified”; missing
 metadata does not prevent browsing production-hosted images. Search matches OCR,

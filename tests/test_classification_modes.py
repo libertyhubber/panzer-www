@@ -72,7 +72,10 @@ class SelectiveClassificationTests(unittest.TestCase):
         payload = json.loads(fetch.call_args.args[0].data)
         self.assertEqual(payload["text"]["format"]["schema"], cli.CONTENT_SCHEMA)
         self.assertEqual(result["classification"]["text"], "New OCR")
-        self.assertEqual(result["classification"]["tags"], RESULT["tags"])
+        self.assertEqual(result["classification"]["tags"], previous["classification"]["tags"])
+        self.assertEqual(result["classification"]["tags_de"], previous["classification"]["tags_de"])
+        self.assertEqual(result["classification"]["tags_en"], previous["classification"]["tags_en"])
+        self.assertEqual(result["tag_format_version"], previous["tag_format_version"])
         self.assertEqual(result["tags_call"], previous["tags_call"])
         self.assertEqual(result["translation_call"], previous["translation_call"])
         self.assertEqual(result["stage_schema_versions"], {"content": 8, "tags": 4})
@@ -101,7 +104,9 @@ class SelectiveClassificationTests(unittest.TestCase):
         previous = record()
         previous["schema_version"] = 1
         del previous["classification"]["description"]
-        del previous["classification"]["tags"]
+        for field in cli.TAG_FIELDS:
+            previous["classification"].pop(field, None)
+        previous.pop("tag_format_version")
         self.save(previous)
         previous = cli.latest_records(self.output)[URL]
         self.assertEqual(cli.stage_versions(previous)["tags"], 0)
@@ -131,7 +136,7 @@ class SelectiveClassificationTests(unittest.TestCase):
         self.assertEqual(status, 0)
         fetch.assert_not_called()
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}), patch.object(cli, "request_bytes", side_effect=[
-            b"\xff\xd8\xffimage", api_result({"tags": []}, cli.TAGS_MODEL),
+            b"\xff\xd8\xffimage", api_result({"tags_de": [], "tags_en": []}, cli.TAGS_MODEL),
         ]) as fetch:
             status, _, _ = self.run_cli(self.options + ["--tags-only"])
         self.assertEqual(status, 0)
@@ -144,7 +149,7 @@ class SelectiveClassificationTests(unittest.TestCase):
         previous.update(schema_version=4, response_id="old-content", usage={"input_tokens": 999, "output_tokens": 777})
         original = copy.deepcopy(previous)
         with patch.object(cli, "request_bytes", side_effect=[
-            api_result({"tags": ["katze", "Katze", "cat"]}, cli.TAGS_MODEL),
+            api_result({"tags_de": ["katze", "Katze"], "tags_en": ["cat"]}, cli.TAGS_MODEL),
         ]) as fetch:
             result = self.classify("tags", previous)
         self.assertEqual(fetch.call_count, 1)
@@ -152,7 +157,8 @@ class SelectiveClassificationTests(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-6-luna")
         self.assertEqual(payload["reasoning"], {"effort": "medium"})
         self.assertIsNone(result["translation_call"])
-        self.assertEqual(result["classification"], {**RESULT, "tags": ["katze", "cat"]})
+        self.assertEqual(result["classification"], {**RESULT, "tags": [],
+                                                  "tags_de": ["katze"], "tags_en": ["cat"]})
         for key in ("model", "reasoning_effort", "response_id", "usage"):
             self.assertEqual(result[key], previous[key])
         self.assertEqual(result["stage_schema_versions"], {"content": 4, "tags": 8})
@@ -167,11 +173,58 @@ class SelectiveClassificationTests(unittest.TestCase):
         content = {key: value for key, value in RESULT.items() if key != "tags"}
         with patch.object(cli, "request_bytes", return_value=api_result(content, cli.DEFAULT_MODEL)):
             result = self.classify("ocr", previous)
-        with patch.object(cli, "request_bytes", return_value=api_result({"tags": []}, cli.TAGS_MODEL)) as fetch:
+        with patch.object(cli, "request_bytes", return_value=api_result({"tags_de": [], "tags_en": []}, cli.TAGS_MODEL)) as fetch:
             result = self.classify("tags", result)
         self.assertEqual(fetch.call_count, 1, "tags-only always uses one request")
         self.assertEqual(result["schema_version"], cli.SCHEMA_VERSION)
         self.assertTrue(cli.record_complete(result, cli.DEFAULT_MODEL, "low"))
+
+    def test_legacy_bilingual_tags_need_split_refresh_but_not_new_ocr(self):
+        previous = record()
+        previous.pop("tag_format_version")
+        previous["classification"].pop("tags_de")
+        previous["classification"].pop("tags_en")
+        previous["classification"]["tags"] = RESULT["tags"]
+        self.save(previous)
+        saved = cli.latest_records(self.output)[URL]
+        self.assertFalse(cli.record_complete(saved, cli.DEFAULT_MODEL, "low"))
+        self.assertFalse(cli.record_complete(saved, cli.DEFAULT_MODEL, "low", mode="tags"))
+        self.assertTrue(cli.record_complete(saved, cli.DEFAULT_MODEL, "low", mode="ocr"))
+        self.assertTrue(cli.record_complete(saved, cli.DEFAULT_MODEL, "low", min_schema=8))
+        content = {key: value for key, value in RESULT.items() if key != "tags"}
+        with patch.object(cli, "request_bytes", return_value=api_result(content, cli.DEFAULT_MODEL)):
+            updated = self.classify("ocr", saved)
+        self.assertNotIn("tags_de", updated["classification"])
+        self.assertNotIn("tag_format_version", updated)
+        self.assertEqual(updated["classification"]["tags"], RESULT["tags"])
+
+    def test_split_lists_normalized_and_union_derived_from_both(self):
+        with patch.object(cli, "request_bytes", return_value=api_result({
+            "tags_de": [" Katze ", "KATZE", "Bitcoin", "", "@RosarotePanzer"],
+            "tags_en": ["cat", " CAT ", "bitcoin", "@Rosarote\nPanzer"],
+        }, cli.TAGS_MODEL)):
+            updated = self.classify("tags", record())
+        self.assertEqual(updated["classification"]["tags_de"], ["Katze"])
+        self.assertEqual(updated["classification"]["tags_en"], ["cat"])
+        self.assertEqual(updated["classification"]["tags"], ["Bitcoin"])
+        self.assertEqual(cli.all_tags(updated["classification"]), ["Bitcoin", "Katze", "cat"])
+        self.save(updated)
+        self.assertEqual(cli.latest_records(self.output)[URL], updated)
+
+    def test_invalid_language_representation_rejected_on_resume(self):
+        for mutate in (
+            lambda r: r["classification"].pop("tags_en"),
+            lambda r: r["classification"].update(tags_de=["Drake"], tags_en=["drake"]),
+            lambda r: r["classification"].update(tags_en=[123]),
+            lambda r: r.update(tag_format_version=True),
+            lambda r: r.update(tag_format_version=-1),
+        ):
+            with self.subTest(mutate=mutate):
+                value = record()
+                mutate(value)
+                self.save(value)
+                with self.assertRaises(cli.ClassificationError):
+                    cli.latest_records(self.output)
 
     def test_tags_without_content_fails_before_any_requests(self):
         with patch.object(cli, "request_bytes") as fetch:
@@ -191,7 +244,7 @@ class SelectiveClassificationTests(unittest.TestCase):
         previous = record()
         previous.update(usage={"input_tokens": 123, "output_tokens": 456}, response_id="do-not-log-content")
         previous["tags_call"]["response_id"] = "do-not-log-tags"
-        with patch.object(cli, "request_bytes", return_value=api_result({"tags": []}, cli.TAGS_MODEL)):
+        with patch.object(cli, "request_bytes", return_value=api_result({"tags_de": [], "tags_en": []}, cli.TAGS_MODEL)):
             result = self.classify("tags", previous)
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):

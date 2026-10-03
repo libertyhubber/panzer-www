@@ -73,6 +73,11 @@ class IngestClassificationTests(unittest.TestCase):
         self.assertEqual(json.loads(self.compact.read_text())[key], {'tags': ['katze'], 'template': None})
         self.assertEqual(json.loads(self.text.read_text())[key], {'text': 'Hallo!', 'description': 'Eine Katze.'})
 
+    def test_default_classification_concurrency_is_ten(self):
+        with patch.object(ingest.classifier, 'classify_many', return_value=(result for result in ())) as classify_many:
+            self.assertEqual(ingest.update_classifications(self.archive, self.www), 0)
+        self.assertEqual(classify_many.call_args.args[2], 10)
+
     def test_resume_skips_complete_images_without_requiring_api_key(self):
         self.output.write_text(json.dumps(record(self.url(self.first))) + '\n')
         with patch.dict(os.environ, {'OPENAI_API_KEY': ''}), patch.object(ingest.classifier, 'classify') as classify:

@@ -16,6 +16,15 @@ TAG_BLACKLIST = {"memes", "meme", "symbolbild", "bildunterschrift", "ausdruck", 
 TAG_ALIASES = {"zitatgrafik": "zitat", "zitat-meme": "zitat"}
 
 
+def export_tags(tags) -> list[str]:
+    if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+        raise ValueError("invalid tags")
+    return list(dict.fromkeys(
+        TAG_ALIASES.get(tag.strip().casefold(), tag)
+        for tag in tags if tag.strip() and tag.strip().casefold() not in TAG_BLACKLIST
+    ))
+
+
 def build_index(source: Path) -> dict:
     index = {}
     with source.open(encoding="utf-8") as file:
@@ -32,8 +41,25 @@ def build_index(source: Path) -> dict:
                 result = record["classification"]
                 tags = result.get("tags", [])
                 template = result["meme_template"]
-                if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
-                    raise ValueError("invalid tags")
+                exported_tags = export_tags(tags)
+                language_tags = {}
+                if "tags_de" in result or "tags_en" in result:
+                    if not all(field in result for field in ("tags_de", "tags_en")):
+                        raise ValueError("both tag language lists are required")
+                    combined = {tag.strip().casefold() for tag in tags}
+                    neutral_format = record.get("tag_format_version", 0) >= 2
+                    groups = [combined]
+                    for field in ("tags_de", "tags_en"):
+                        language_tags[field] = export_tags(result[field])
+                        group = {tag.strip().casefold() for tag in result[field]}
+                        if neutral_format:
+                            if any(group & previous for previous in groups):
+                                raise ValueError("neutral and language tag lists must be disjoint")
+                            groups.append(group)
+                        elif not group <= combined:
+                            raise ValueError("language tags must belong to combined tags")
+                    if neutral_format:
+                        language_tags["tag_format_version"] = record["tag_format_version"]
                 if template["status"] not in {"recognized", "unknown", "none"}:
                     raise ValueError("invalid template status")
                 name = template["name"] if template["status"] == "recognized" else None
@@ -43,10 +69,8 @@ def build_index(source: Path) -> dict:
                     raise ValueError("invalid text or description")
                 # The last appended result replaces earlier classifications of this image.
                 index[match[1]] = {
-                    "tags": list(dict.fromkeys(
-                        TAG_ALIASES.get(tag.strip().casefold(), tag)
-                        for tag in tags if tag.strip().casefold() not in TAG_BLACKLIST
-                    )),
+                    "tags": exported_tags,
+                    **language_tags,
                     "template": name.strip().casefold() if name is not None else None,
                     "template_status": template["status"],
                     "text": result["text"],
@@ -66,7 +90,7 @@ def export_index(source: Path, output: Path, text_output: Path | None = None) ->
             return
     else:
         index = build_index(source) if source.exists() else {}
-    compact = {key: {field: entry[field] for field in ("tags", "template")}
+    compact = {key: {field: entry[field] for field in ("tags", "tags_de", "tags_en", "tag_format_version", "template") if field in entry}
                for key, entry in index.items()}
     text = {key: {field: entry[field] for field in ("text", "description")}
             for key, entry in index.items()}

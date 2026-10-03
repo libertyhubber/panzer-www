@@ -106,7 +106,7 @@ class ImportTests(unittest.TestCase):
         self.assertIn('_4_', name)
         self.assertEqual((self.archive / 'images/2021/09' / name).read_bytes(), self.red)
         index = json.loads((self.archive / 'images/2021/09/entry_index.json').read_text())
-        self.assertEqual(index, [{'w': 40, 'h': 30, 'name': name}])
+        self.assertEqual(index, [{'w': 40, 'h': 30, 'bg': 'F00', 'name': name}])
         self.assertEqual(json.loads(self.metadata_path.read_text())[name], [4, 0, 42, None])
         self.assertEqual(json.loads(self.state_path.read_text())['last_id'], 4)
         self.assertEqual(state['pending_archives'], ['archive'])
