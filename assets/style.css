@@ -15,6 +15,11 @@ img, picture, video, canvas, svg {
 a {color: unset;}
 
 /* global styles */
+html {
+	/* Reserve scrollbar space even when a dialog locks page scroll. */
+	scrollbar-gutter: stable;
+}
+
 body {
 	color: white;
 	background: black;

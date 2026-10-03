@@ -155,6 +155,14 @@ test('closing a dialog invalidates pending clipboard work', async () => {
     assert.equal(ui.panels[0].status.textContent, '')
 })
 
+test('page reserves scrollbar space while navigation dialogs lock scroll', () => {
+    const css = readFileSync(`${__dirname}/../assets/style.css`, 'utf8')
+    const navigationCss = readFileSync(`${__dirname}/../assets/navigation.css`, 'utf8')
+    assert.match(css, /html\s*\{[^}]*scrollbar-gutter:\s*stable;/)
+    assert.match(css, /body\s*\{[^}]*overflow-y:\s*scroll;/)
+    assert.match(navigationCss, /body\.site-nav-modal-open\s*\{\s*overflow:\s*hidden;/)
+})
+
 test('generated main page includes approved navigation and retains the gallery', () => {
     const html = readFileSync(`${__dirname}/../index.html`, 'utf8')
     assert.match(html, /Inoffizielles Meme-Archiv/)
