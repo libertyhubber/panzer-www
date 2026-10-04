@@ -25,49 +25,112 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
         resolveClassifications = resolve
         rejectClassifications = reject
     })
-    let html = '', thumbnails = [], classificationNodes = []
+    // Small DOM model: cards, thumbnails and metadata have persistent identities.
+    // Replacing innerHTML still recreates descendants, just as in a browser.
     const classificationPattern = /<div class="thumbnail-classification" data-image-id="([^"]+)"[^>]*>(?:<div class="classification-tags"[^>]*>[\s\S]*?<\/div>)?<\/div>/g
     const thumbnailPattern = /<a href="[^"]*" class="thumbnail" style="[^"]*"[^>]*>/g
-    const node = {
-        clientWidth: options.clientWidth || 456,
-        attributes: {},
-        setAttribute(name, value) { this.attributes[name] = value },
-        style: { setProperty(name, value) { this[name] = value } },
-        querySelectorAll: selector => selector === '.thumbnail' ? thumbnails
-            : selector === '.classification-tags' ? options.classificationDOM
-                ? classificationNodes.map(node => node.group).filter(Boolean) : tagGroups
-            : selector === '.thumbnail-classification[data-image-id]' ? classificationNodes
-            : selector === '.classification-more' ? options.moreButtons || [] : [],
-        get innerHTML() {
-            let i = 0
-            const result = html.replace(thumbnailPattern, anchor => {
-                const style = Object.entries(thumbnails[i++].style).map(([key, value]) =>
-                    `${key.replace(/[A-Z]/g, char => '-' + char.toLowerCase())}: ${value};`).join(' ')
-                return anchor.replace(/style="[^"]*"/, `style="${style}"`)
-            })
-            let classificationIndex = 0
-            return options.classificationDOM ? result.replace(classificationPattern,
-                () => classificationNodes[classificationIndex++].outerHTML) : result
-        },
-        set innerHTML(value) {
-            html = value
-            thumbnails = [...value.matchAll(thumbnailPattern)].map(([anchor]) => {
-                const attrs = Object.fromEntries([...anchor.matchAll(/([-\w]+)="([^"]*)"/g)]
-                    .map(([, name, value]) => [name, value]))
-                const style = Object.fromEntries(attrs.style.split(';').filter(part => part.trim()).map(part => {
-                    const colon = part.indexOf(':')
-                    return [part.slice(0, colon).trim().replace(/-([a-z])/g, (_, char) => char.toUpperCase()),
-                        part.slice(colon + 1).trim()]
-                }))
-                return { style, getAttribute: name => attrs[name] }
-            })
-            if (options.classificationDOM) {
-                classificationNodes = [...value.matchAll(classificationPattern)].map(([markup, imageId]) =>
-                    classificationElement(markup, imageId, parseFloat(node.style['--thumbnail-display-size']),
-                        options.tagMeasurements))
-            }
-        },
+    const escapeAttribute = value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const parseAttrs = markup => Object.fromEntries([...markup.matchAll(/([-\w]+)="([^"]*)"/g)]
+        .map(([, name, value]) => [name, value.replace(/&(amp|quot|lt|gt|#39);/g, entity => ({
+            '&amp;': '&', '&quot;': '"', '&lt;': '<', '&gt;': '>', '&#39;': "'",
+        })[entity])]))
+    const parseStyle = text => Object.fromEntries(text.split(';').filter(part => part.trim()).map(part => {
+        const colon = part.indexOf(':')
+        return [part.slice(0, colon).trim().replace(/-([a-z])/g, (_, char) => char.toUpperCase()),
+            part.slice(colon + 1).trim()]
+    }))
+    function element(tagName = 'div') {
+        let html = '', thumbnails = [], classificationNodes = [], metadata = null
+        return {
+            children: [], attributes: {}, innerHTMLWrites: 0, detachments: 0,
+            style: { setProperty(name, value) { this[name] = value } },
+            set className(value) { this.attributes.class = value },
+            getAttribute(name) { return this.attributes[name] ?? null },
+            setAttribute(name, value) {
+                this.attributes[name] = String(value)
+                if (name === 'style') Object.assign(this.style, parseStyle(value))
+            },
+            insertBefore(child, reference) {
+                if (child.parentNode) child.remove()
+                const index = reference ? this.children.indexOf(reference) : this.children.length
+                this.children.splice(index, 0, child)
+                child.parentNode = this
+                return child
+            },
+            remove() {
+                if (this.parentNode) {
+                    this.detachments += 1
+                    this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1)
+                }
+                this.parentNode = null
+            },
+            querySelector(selector) {
+                if (selector === '.thumbnail-metadata') return metadata
+                return this.querySelectorAll(selector)[0] || null
+            },
+            querySelectorAll(selector) {
+                if (selector === '.classification-tags' && !options.classificationDOM) return tagGroups
+                if (selector === '.classification-more') return options.moreButtons || []
+                const own = selector === '.thumbnail' ? thumbnails
+                    : selector === '.classification-tags' ? classificationNodes.map(node => node.group).filter(Boolean)
+                    : selector === '.thumbnail-classification[data-image-id]' ? classificationNodes : []
+                return [...own, ...(metadata ? metadata.querySelectorAll(selector) : []),
+                    ...this.children.flatMap(child => child.querySelectorAll(selector))]
+            },
+            get outerHTML() {
+                return `<${tagName} ` + Object.entries(this.attributes).map(([key, value]) => `${key}="${escapeAttribute(value)}"`).join(' ') +
+                    `>${this.innerHTML}</${tagName}>`
+            },
+            get innerHTML() {
+                if (this.children.length) return this.children.map(child => child.outerHTML).join('')
+                let i = 0
+                let result = html.replace(thumbnailPattern, () => {
+                    const thumbnail = thumbnails[i++]
+                    const attrs = { ...thumbnail.attrs, style: Object.entries(thumbnail.style).filter(([, value]) => value)
+                        .map(([key, value]) => `${key.replace(/[A-Z]/g, char => '-' + char.toLowerCase())}: ${value};`).join(' ') }
+                    return '<a ' + Object.entries(attrs).map(([key, value]) => `${key}="${escapeAttribute(value)}"`).join(' ') + '>'
+                })
+                if (metadata) return result.slice(0, result.indexOf('<div class="thumbnail-metadata">')) +
+                    `<div class="thumbnail-metadata">${metadata.innerHTML}</div>`
+                let classificationIndex = 0
+                return options.classificationDOM ? result.replace(classificationPattern,
+                    () => classificationNodes[classificationIndex++].outerHTML) : result
+            },
+            set innerHTML(value) {
+                this.innerHTMLWrites += 1
+                for (const child of this.children) child.parentNode = null
+                this.children = []
+                html = value
+                metadata = null
+                const marker = '<div class="thumbnail-metadata">'
+                if (tagName === 'article' && value.includes(marker)) {
+                    metadata = element()
+                    metadata.innerHTML = value.slice(value.indexOf(marker) + marker.length, -6)
+                }
+                thumbnails = [...value.matchAll(thumbnailPattern)].map(([anchor]) => {
+                    const attrs = parseAttrs(anchor)
+                    const styleWrites = []
+                    const style = new Proxy(parseStyle(attrs.style), {
+                        get(target, name) {
+                            const value = target[name]
+                            return options.normalizeCSS && name === 'backgroundImage' && value
+                                ? value.replace(/url\('([^']*)'\)/g, 'url("$1")') : value
+                        },
+                        set(target, name, value) { styleWrites.push(name); target[name] = value; return true },
+                    })
+                    return { attrs, style, styleWrites, getAttribute: name => attrs[name],
+                        setAttribute(name, value) { attrs[name] = value } }
+                })
+                classificationNodes = options.classificationDOM && !metadata
+                    ? [...value.matchAll(classificationPattern)].map(([markup, imageId]) =>
+                        classificationElement(markup, imageId, parseFloat(node.style['--thumbnail-display-size']),
+                            options.tagMeasurements)) : []
+            },
+        }
     }
+    const node = element()
+    node.clientWidth = options.clientWidth || 456
     const controls = Object.fromEntries(['filter-reactions', 'filter-template', 'filter-search', 'filter-status',
         'filter-search-clear', 'filter-search-icon'].map(id =>
         [id, {
@@ -147,7 +210,8 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
                 if (node.id === 'all-tags-overlay') overlay = node
                 else dialog = node
             } },
-            createElement() {
+            createElement(tagName) {
+                if (tagName === 'article') return element(tagName)
                 const pre = { textContent: '' }
                 const firstButton = { focus(options) { this.focused = true; this.focusOptions = options } }
                 return {
@@ -1678,6 +1742,156 @@ function scrollClock(ui) {
     }
 }
 
+test('tiny scrolls keep loading originals and their DOM nodes unchanged, including normalized CSS URLs', async () => {
+    const entries = manyEntries(200)
+    const ui = gallery(false, [], entries, 'localhost', { normalizeCSS: true })
+    ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
+        `2024/01/${entry.name}`, { tags: ['matching'], template: null },
+    ])))
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'matching' })
+    const cards = [...ui.node.children]
+    const tiles = [...ui.node.querySelectorAll('.thumbnail')]
+    const backgrounds = tiles.map(tile => tile.style.backgroundImage)
+    assert.ok(tiles.length > 0)
+    assert.ok(backgrounds.every(background => background.startsWith('url("https://archive.example/')))
+    assert.ok(originalRequests(ui).length > 0, 'originals are still loading')
+    const writes = tiles.map(tile => tile.styleWrites.length)
+    const galleryWrites = ui.node.innerHTMLWrites
+    const imageRequests = ui.imageRequests.length
+    const clock = scrollClock(ui)
+    for (const pixels of [1, 2, 3, 0]) {
+        ui.context.document.documentElement.scrollTop = pixels
+        ui.listeners.scroll[0]({ type: 'scroll' })
+        await flush()
+        assert.deepEqual(ui.node.children.slice(0, cards.length), cards)
+        assert.deepEqual(ui.node.querySelectorAll('.thumbnail').slice(0, tiles.length), tiles)
+        assert.deepEqual(tiles.map(tile => tile.style.backgroundImage), backgrounds)
+        assert.deepEqual(tiles.map(tile => tile.styleWrites.length), writes, 'do not rewrite loading backgrounds')
+    }
+    await clock.settle()
+    assert.deepEqual(ui.node.children, cards)
+    assert.deepEqual(ui.node.querySelectorAll('.thumbnail'), tiles)
+    assert.deepEqual(tiles.map(tile => tile.styleWrites.length), writes)
+    assert.equal(ui.node.innerHTMLWrites, galleryWrites, 'never replace the gallery window on scroll')
+    assert.equal(ui.imageRequests.length, imageRequests)
+})
+
+test('a loading sprite sheet remains attached and visible through scroll and idle', async () => {
+    const ui = gallery(false, [], manyEntries(200), 'localhost', { imageLoad() {} })
+    await flush()
+    const card = ui.node.children[6]
+    const thumbnail = card.querySelector('.thumbnail')
+    const background = thumbnail.style.backgroundImage
+    assert.match(background, /thumbnails-\d+\.webp/)
+    assert.equal(originalRequests(ui).length, 0, 'sprite paint is still pending')
+    const writes = thumbnail.styleWrites.length
+    const imageRequests = ui.imageRequests.length
+    const clock = scrollClock(ui)
+    clock.scroll(3)
+    await flush()
+    await clock.settle()
+    assert.ok(ui.node.children.includes(card))
+    assert.equal(card.querySelector('.thumbnail'), thumbnail)
+    assert.equal(thumbnail.style.backgroundImage, background)
+    assert.equal(thumbnail.styleWrites.length, writes)
+    assert.equal(ui.imageRequests.length, imageRequests)
+    assert.equal(card.detachments, 0)
+})
+
+test('scrolling reconciles only entering and leaving buffered cards in both directions', async () => {
+    const ui = gallery(false, [], manyEntries(200))
+    ui.resolveClassifications({})
+    await flush()
+    const initialCards = [...ui.node.children]
+    const first = initialCards[0]
+    const retained = initialCards[6] // This card stays inside the overlapping window.
+    const thumbnail = retained.querySelector('.thumbnail')
+    const background = thumbnail.style.backgroundImage
+    const writes = thumbnail.styleWrites.length
+    const galleryWrites = ui.node.innerHTMLWrites
+    const clock = scrollClock(ui)
+    for (const row of [1, 2, 3, 2, 1, 0]) {
+        const previous = new Map(ui.node.children.map(card => [card.getAttribute('data-card-key'), card]))
+        clock.scroll(row)
+        await flush()
+        const currentKeys = new Set(ui.node.children.map(card => card.getAttribute('data-card-key')))
+        for (const card of ui.node.children) {
+            const old = previous.get(card.getAttribute('data-card-key'))
+            if (old) {
+                assert.equal(card, old, 'overlapping cards are not replaced')
+                assert.equal(card.detachments, 0, 'overlapping cards are never detached and reinserted')
+            }
+        }
+        for (const [key, card] of previous) {
+            if (!currentKeys.has(key)) assert.equal(card.parentNode, null, 'remove only departing cards')
+        }
+        assert.ok(ui.node.children.includes(retained))
+        assert.equal(retained.querySelector('.thumbnail'), thumbnail)
+        assert.equal(thumbnail.style.backgroundImage, background)
+        assert.equal(thumbnail.styleWrites.length, writes)
+        assert.ok(ui.node.children.length <= 12, 'DOM size stays bounded by the buffered viewport')
+    }
+    assert.notEqual(ui.node.children[0], first, 'an evicted card is created anew when it re-enters')
+    await clock.settle()
+    assert.equal(retained.querySelector('.thumbnail'), thumbnail)
+    assert.equal(ui.node.innerHTMLWrites, galleryWrites)
+})
+
+test('an original completing during scroll upgrades a retained thumbnail only once', async () => {
+    const ui = gallery(false, [], manyEntries(200), 'localhost', { normalizeCSS: true })
+    ui.resolveClassifications({})
+    await flush()
+    const original = originalRequests(ui)[0]
+    const card = ui.node.children.find(card => card.querySelector('.thumbnail').getAttribute('href') === original.src)
+    const thumbnail = card.querySelector('.thumbnail')
+    const clock = scrollClock(ui)
+    clock.scroll(0)
+    await flush()
+    const writes = thumbnail.styleWrites.filter(name => name === 'backgroundImage').length
+    original.onload()
+    await flush()
+    assert.equal(card.querySelector('.thumbnail'), thumbnail)
+    assert.equal(thumbnail.style.backgroundImage, `url("${original.src}")`)
+    assert.equal(thumbnail.styleWrites.filter(name => name === 'backgroundImage').length, writes + 1)
+    for (const pixels of [1, 2, 0]) {
+        ui.context.document.documentElement.scrollTop = pixels
+        ui.listeners.scroll[0]({ type: 'scroll' })
+        await flush()
+    }
+    await clock.settle()
+    assert.equal(card.querySelector('.thumbnail'), thumbnail)
+    assert.equal(thumbnail.styleWrites.filter(name => name === 'backgroundImage').length, writes + 1)
+})
+
+test('metadata enrichment and resizing retain the thumbnail of a loading image', async () => {
+    const ui = gallery(false, [], null, 'localhost', { webpSupported: false })
+    await flush()
+    const card = ui.node.children[1] // Leave this original pending throughout the test.
+    const thumbnail = card.querySelector('.thumbnail')
+    const background = thumbnail.style.backgroundImage
+    const writes = thumbnail.styleWrites.filter(name => name === 'backgroundImage').length
+    ui.resolveClassifications({
+        '2024/01/2024-01-01_a.jpg': { tags: ['New tag'], description: 'New description' },
+    })
+    // Metadata starts after the initial image paint; simulate that paint explicitly.
+    originalRequests(ui)[0].onload()
+    await flush()
+    assert.equal(ui.node.children[1], card)
+    assert.equal(card.querySelector('.thumbnail'), thumbnail)
+    assert.equal(thumbnail.getAttribute('aria-label'), 'New description')
+    assert.match(card.innerHTML, /New tag/)
+    const clock = scrollClock(ui)
+    ui.node.clientWidth = 375
+    ui.listeners.resize[0]({ type: 'resize' })
+    await clock.settle()
+    assert.equal(ui.node.children[1], card)
+    assert.equal(card.querySelector('.thumbnail'), thumbnail)
+    assert.equal(thumbnail.style.backgroundImage, background)
+    assert.equal(thumbnail.styleWrites.filter(name => name === 'backgroundImage').length, writes)
+    assert.equal(thumbnail.style.backgroundSize, 'contain')
+})
+
 test('overlapping cards preserve fitted tags and counters throughout scroll and idle', async () => {
     const entries = manyEntries(200)
     const measurements = new Map()
@@ -2396,7 +2610,7 @@ test('resizing between compact and full-size cards updates positions and sprite 
         assert.deepEqual(cardPositions(ui).slice(0, 2).map(([, left]) => left), lefts)
         const tile = ui.node.querySelectorAll('.thumbnail')[0]
         if (size === 220) {
-            assert.equal(tile.style.backgroundSize, undefined, 'full-size sprite uses its natural dimensions')
+            assert.equal(tile.style.backgroundSize, '', 'clear compact scaling so full-size sprite uses its natural dimensions')
             assert.equal(tile.style.backgroundPosition, '-0px -222px')
         } else {
             assert.ok(Math.abs(parseFloat(tile.style.backgroundSize) - 1108 * size / 220) < 1e-9)

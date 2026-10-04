@@ -620,16 +620,28 @@ function usesOriginal(item, filtered) {
         GALLERY_IMAGES.get(item.thumbSrc)?.status === 'failed'
 }
 
+// CSSOM normalizes URLs, colors and positions. Cache our desired paint rather
+// than comparing serialized styles, which could reassign a loading URL on scroll.
+function paintGalleryThumbnail(thumbnail, src, position, size, bg) {
+    const paint = JSON.stringify([src, position, size, bg])
+    if (thumbnail.galleryPaint === paint) return
+    if (thumbnail.galleryImageSrc !== src) {
+        thumbnail.style.backgroundImage = `url('${src}')`
+        thumbnail.galleryImageSrc = src
+    }
+    thumbnail.style.backgroundPosition = position
+    thumbnail.style.backgroundSize = size
+    thumbnail.style.backgroundColor = `#${bg}`
+    thumbnail.galleryPaint = paint
+}
+
 function showOriginal(item) {
     if (galleryScrolling && GALLERY_IMAGES.get(item.src)?.status !== 'loaded') return
     galleryImage(item.src)
     // Only mutate currently rendered links; async loads may outlive a filter or scroll.
     for (const thumbnail of document.getElementById('gallery').querySelectorAll('.thumbnail')) {
         if (thumbnail.getAttribute('href') !== item.src) continue
-        thumbnail.style.backgroundImage = `url('${item.src}')`
-        thumbnail.style.backgroundPosition = 'center'
-        thumbnail.style.backgroundSize = 'contain'
-        thumbnail.style.backgroundColor = `#${item.bg}`
+        paintGalleryThumbnail(thumbnail, item.src, 'center', 'contain', item.bg)
     }
 }
 
@@ -929,7 +941,9 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
 
     GALLERY_STATE.lastRenderState = renderState
 
-    const thumbnailsHTML = []
+    // Reconcile the buffered window by identity, not by replacing its HTML.
+    const cards = new Map(Array.from(galleryNode.children, card => [card.getAttribute('data-card-key'), card]))
+    const renderedCards = []
     const nextClassifications = new Map()
     const preservedClassifications = new Set()
     const countFormat = new Intl.NumberFormat('de', { notation: 'compact', maximumFractionDigits: 1 })
@@ -943,12 +957,22 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
             `top: ${Math.floor(index / tnColumns) * rowHeight}px;`,
             `left: ${marginLeft + (index % tnColumns) * columnWidth}px;`,
         ]
+        const key = item ? item.imageId : `pending:${index}`
+        let card = cards.get(key)
+        if (!card) {
+            card = document.createElement('article')
+            card.className = 'gallery-item'
+        }
+        const positionStyle = itemStyles.join(' ')
+        if (card.getAttribute('style') !== positionStyle) card.setAttribute('style', positionStyle)
+        if (card.getAttribute('data-card-key') !== key) card.setAttribute('data-card-key', key)
+        renderedCards.push(card)
         if (!item) {
-            thumbnailsHTML.push(
-                `<article class="gallery-item" style="${itemStyles.join(' ')}" aria-busy="true">` +
-                `<div class="thumbnail" style="background-color: #222;"></div>` +
-                `<div class="thumbnail-metadata">Datum wird geladen…</div></article>`
-            )
+            if (!cards.has(key)) {
+                card.setAttribute('aria-busy', 'true')
+                card.innerHTML = '<div class="thumbnail" style="background-color: #222;"></div>' +
+                    '<div class="thumbnail-metadata">Datum wird geladen…</div>'
+            }
             continue
         }
         const classification = GALLERY_STATE.classificationIndex[item.imageId]
@@ -964,7 +988,10 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
         // already-loaded originals all render archive images directly.
         const original = usesOriginal(item, filtered)
         const imageSrc = original ? item.src : item.thumbSrc
-        const displayImage = !galleryScrolling || GALLERY_IMAGES.get(imageSrc)?.status === 'loaded'
+        // Scrolling may defer a NEW image, but must never erase an in-flight one.
+        const thumbnail = card.querySelector('.thumbnail')
+        const displayImage = !galleryScrolling || thumbnail?.galleryImageSrc === imageSrc ||
+            GALLERY_IMAGES.get(imageSrc)?.status === 'loaded'
         const thumbStyles = !displayImage ? [] : original ? [
             `background-image: url('${item.src}');`,
             `background-position: center;`,
@@ -991,23 +1018,48 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
             ? `<span class="telegram-unavailable" title="Telegram nicht verfügbar">${date}</span>`
             : `<a class="telegram-link" href="https://t.me/RosaroterPanzerBackup/${item.telegramMessageId}" target="_blank" rel="noopener" title="Auf Telegram ansehen">${date}</a>`
 
-        thumbnailsHTML.push(
-            `<article class="gallery-item" style="${itemStyles.join(' ')}">` +
-            `<a ${thumbAttrs.join(' ')}></a>` +
-            `<div class="thumbnail-metadata">` +
+        const metadataDetailsHTML =
             `<div class="thumbnail-stats">` +
             `<span class="reaction-count" title="Telegram-Reaktionen" aria-label="${item.reactions ?? 'Nicht verfügbar'} Reaktionen">♥ ${reactionText}</span>` +
             (item.views === null ? '' : `<span title="Telegram-Aufrufe" aria-label="${item.views} Aufrufe">◉ ${formatCount(item.views)}</span>`) +
             (item.comments === null ? '' : `<span title="Telegram-Kommentare" aria-label="${item.comments} Kommentare">💬 ${formatCount(item.comments)}</span>`) +
             `</div>${telegramLink}` +
-            (DEBUG_ENABLED ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${galleryIndex}" aria-haspopup="dialog">debug</button>` : '') +
-            (preview.html || classificationSource) +
-            `</div></article>`
-        )
+            (DEBUG_ENABLED ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${galleryIndex}" aria-haspopup="dialog">debug</button>` : '')
+        const metadataHTML = metadataDetailsHTML + classificationSource
+        const renderedMetadataHTML = metadataDetailsHTML + (preview.html || classificationSource)
+        if (!thumbnail) {
+            card.innerHTML = `<a ${thumbAttrs.join(' ')}></a>` +
+                `<div class="thumbnail-metadata">${renderedMetadataHTML}</div>`
+        } else {
+            // Keep the actual image-bearing node through scroll, resize and metadata
+            // updates. In particular, do not rewrite its complete style attribute.
+            for (const [name, value] of Object.entries({
+                href: item.src, '-data-gallery-idx': galleryIndex,
+                'aria-label': imageLabel, title: imageLabel,
+            })) {
+                if (thumbnail.getAttribute(name) !== String(value)) thumbnail.setAttribute(name, String(value))
+            }
+            if (card.galleryMetadataHTML !== metadataHTML) {
+                card.querySelector('.thumbnail-metadata').innerHTML = renderedMetadataHTML
+            }
+        }
+        if (displayImage) {
+            paintGalleryThumbnail(thumbnail || card.querySelector('.thumbnail'), imageSrc,
+                original ? 'center' : `-${item.bgOffsetX * spriteScale}px -${item.bgOffsetY * spriteScale}px`,
+                original ? 'contain' : spriteScale === 1 ? '' : `${THUMBNAIL_SHEET_WIDTH * spriteScale}px auto`, item.bg)
+        }
+        card.galleryMetadataHTML = metadataHTML
     }
 
     closeTagOverlay()
-    galleryNode.innerHTML = thumbnailsHTML.join("")
+    const retained = new Set(renderedCards)
+    for (const card of Array.from(galleryNode.children)) {
+        if (!retained.has(card)) card.remove()
+    }
+    for (let i = 0; i < renderedCards.length; i++) {
+        const card = renderedCards[i]
+        if (galleryNode.children[i] !== card) galleryNode.insertBefore(card, galleryNode.children[i] || null)
+    }
     if (!galleryScrolling) {
         fitClassificationTags(galleryNode, preservedClassifications)
         for (const node of galleryNode.querySelectorAll('.thumbnail-classification[data-image-id]')) {
