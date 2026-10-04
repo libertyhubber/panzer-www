@@ -154,6 +154,17 @@ class SyncTests(unittest.TestCase):
         (self.root / 'future/images').mkdir(parents=True)
         self.assertEqual(self.update_images(['--force']), [(None, self.archive)])
 
+    def test_staging_cleanup_preserves_monthly_metadata(self):
+        month = self.images / '2026/10'
+        month.mkdir(parents=True)
+        keep = ['entry_index.json', 'thumbnails-00.webp', 'telegram_metadata.json',
+                'classification_index.json', 'classification_text_index.json']
+        for name in keep + ['original.jpg']:
+            (month / name).write_text('{}')
+        with patch.object(sync, 'IMG_REPOS', {}), change_dir(self.www):
+            sync._update_dir_index(month)
+        self.assertEqual(sorted(path.name for path in month.iterdir()), sorted(keep))
+
     def test_legacy_thumbnail_does_not_trigger_ingest(self):
         month = self.images / '2026/10'
         month.mkdir(parents=True)

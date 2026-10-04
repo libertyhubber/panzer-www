@@ -39,7 +39,7 @@ falls back to address selection for manual copy.
 Run navigation and gallery regression tests with:
 
 ```sh
-node --test tests/test_navigation.js tests/test_gallery_classifications.js
+node --test tests/test_navigation.js tests/test_gallery_classifications.js tests/test_search_worker.js
 ```
 
 ## Shareable gallery navigation
@@ -228,7 +228,7 @@ still photo and preserve its bytes without recompression. Missing archive checko
 or unsupported years fail rather than silently skipping images.
 
 By default, imports update archive monthly/directory indexes,
-`scripts/telegram_messages_cache.json` and `images/telegram_metadata.json` **locally**.
+`scripts/telegram_messages_cache.json` and `images/YYYY/MM/telegram_metadata.json` **locally**.
 Website monthly indexes/sprites/classifications are not regenerated until `--ingest`;
 the gallery will not show new entries before that step, and original URLs will not
 be public until the archive is published. Ingest processes the affected archives'
@@ -292,9 +292,9 @@ uv run --script scripts/backfill_telegram.py --telegram-log
 ```
 
 The backfill updates `scripts/telegram_messages_cache.json` and exports
-`images/telegram_metadata.json`; it does **not** rename/ingest images, commit or
-push. Review and publish both JSON files yourself. Do not run it concurrently
-with normal sync or another backfill. It uses the same `panzerimgsync.session`
+`images/YYYY/MM/telegram_metadata.json`; it does **not** rename/ingest images, commit or
+push. Review and publish the cache and monthly metadata files yourself. Do not run
+it concurrently with normal sync or another backfill. It uses the same `panzerimgsync.session`
 as normal sync; keep that session and credentials private.
 
 Default mode is **archive-gap driven**, not an exhaustive history/count refresh.
@@ -861,9 +861,10 @@ make html
 ```
 
 `scripts/export_classifications.py` reads `images/classifications.jsonl` and writes
-two indexes, keyed by archive-relative image paths: `images/classification_index.json`
-contains neutral `tags`, `tags_de`/`tags_en`, a tag-format marker and template names
-(or legacy combined tags for older records); `images/classification_text_index.json` contains
+monthly indexes beside `entry_index.json`, keyed by archive-relative image paths:
+`images/YYYY/MM/classification_index.json` contains neutral `tags`, `tags_de`/`tags_en`,
+a tag-format marker and template names (or legacy combined tags for older records);
+`images/YYYY/MM/classification_text_index.json` contains
 OCR text and descriptions. The last appended result for each image wins. Neither
 index includes API diagnostics or classification history.
 Generic tags `memes`, `meme`, `ausdruck`, `gesichtsausdruck` and `text-meme` are
@@ -871,16 +872,38 @@ excluded case-insensitively during export. Tags `zitatgrafik` and `zitat-meme`
 are converted to `zitat` case-insensitively, with duplicates removed; raw results
 remain unchanged. Exported template names are trimmed and case-folded so casing
 variants share one filter value. Unknown templates do not display a template label.
-Deploy both generated indexes alongside the website; the raw JSONL is not needed by
-the browser. Without a local JSONL, existing split indexes are preserved; an old
-combined index is automatically split on export.
+Deploy all monthly indexes and `images/classification_catalog.json` alongside the
+website; the catalog contains only repeated-tag and template image counts (singleton
+tags implicitly have count 1), and the raw JSONL is not needed by the browser. Without a local JSONL, existing monthly indexes are
+preserved. Old monolithic split or combined indexes are migrated into monthly
+chunks and removed on export.
 
-The gallery renders first, then loads tags/templates and Telegram metadata in the
-background. After both have finished loading and rendering (or failed), the larger
-text/description index is requested last. Tag and template filtering work before
-it arrives; OCR/description search and thumbnail descriptions become available
-when it finishes. The search placeholder/status indicate loading or unavailable
-full-text data, without preventing tag search or image browsing.
+The gallery renders first, then loads tags/templates and Telegram metadata for
+only the browsed months in the background. After both have finished loading and
+rendering (or failed), those months' text/description chunks are requested last.
+Scrolling and lightbox navigation load additional months on demand; activating
+filters loads the full archive in a bounded six-month queue, including metadata.
+Template filtering can work before full text arrives. Text searches wait for both
+tag/template and OCR/description chunks, so later matches cannot shift existing
+results. Failed text chunks still allow tag matches, with an incomplete-results
+notice. The search placeholder/status indicate loading or unavailable full-text
+data, without preventing image browsing.
+
+`assets/search-worker.js` owns HTTP/JSON caching, archive loading, normalized search
+fields and all filter matching. Browsing and searches share its cache; successful
+monthly chunks are reused, while failed requests can be retried by changing a filter.
+Requests run concurrently, but matching archive indices are published only from a
+settled newest-first prefix. Older matches are buffered until all newer months have
+settled the metadata required by the filter; published results only append. Failed
+requests count as settled and produce an incomplete-results notice without blocking
+older months. Loading remains indicated while other requests are pending. Changing
+a query resets its publication boundary; query versions prevent late results from
+replacing newer filters or Back/Forward navigation.
+`assets/app.js` handles URL state, lightbox interactions and viewport rendering; it
+never scans archive text on the main thread. If workers fail or are blocked, browsing
+falls back to page-side loading and search reports that it is unavailable. Serve the
+worker asset from the same origin as the page (and allow it in any `worker-src` CSP).
+
 At viewport widths up to 600px, the filter form uses two control rows: reactions
 and template side by side, then full-width search. Controls have fixed heights,
 and the template wrapper has an explicit width before options load, preventing

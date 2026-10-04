@@ -1152,6 +1152,13 @@ class BackfillTests(unittest.TestCase):
         self.cache_path = root / 'messages.json'
         self.metadata_path = root / 'metadata.json'
         self.photo_cache_dir = root / 'photos'
+        # These matcher fixtures use non-archive names; chunk layout is covered
+        # separately by the metadata export tests.
+        from functools import partial
+        patcher = patch.object(backfill.sync, 'dump_gallery_metadata',
+                               partial(backfill.sync.dump_gallery_metadata, monthly=False))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         for module, name, value in [
             (backfill, 'STATE_PATH', self.state_path),
             (backfill.sync, 'MESSAGES_CACHE_PATH', self.cache_path),

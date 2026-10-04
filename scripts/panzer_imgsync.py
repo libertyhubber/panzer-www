@@ -113,7 +113,7 @@ def dump_messages(messages: dict[int, dict]) -> None:
     tmp_path.rename(MESSAGES_CACHE_PATH)
 
 
-def dump_gallery_metadata(messages: dict[int, dict]) -> None:
+def dump_gallery_metadata(messages: dict[int, dict], *, monthly: bool = True) -> None:
     """Write the Telegram fields needed by the public gallery.
 
     A filename can occasionally occur in more than one Telegram message. In
@@ -129,16 +129,15 @@ def dump_gallery_metadata(messages: dict[int, dict]) -> None:
                 message.get('tview'), message.get('tcomments'),
             ]
 
-    metadata_data = json.dumps(
-        metadata, sort_keys=True, separators=(',', ':')
-    ).encode('utf-8')
-    if GALLERY_METADATA_PATH.exists():
-        if GALLERY_METADATA_PATH.read_bytes() == metadata_data:
-            return
-
-    tmp_path = GALLERY_METADATA_PATH.with_suffix('.json.tmp')
-    tmp_path.write_bytes(metadata_data)
-    tmp_path.rename(GALLERY_METADATA_PATH)
+    if __package__:
+        from .export_classifications import write_index, write_monthly_indexes
+    else:
+        from export_classifications import write_index, write_monthly_indexes
+    if monthly:
+        write_monthly_indexes(GALLERY_METADATA_PATH, metadata, filenames=True)
+        GALLERY_METADATA_PATH.unlink(missing_ok=True)
+    else:
+        write_index(GALLERY_METADATA_PATH, metadata)
 
 
 def digest_img(data: bytes, ) -> str:
@@ -385,7 +384,10 @@ def _update_images(args: list[str]) -> list[tuple[pl.Path | None, pl.Path]]:
 def _update_dir_index(www_img_dir):
     if www_img_dir:
         for path in www_img_dir.iterdir():
-            if path.name.startswith("thumbnails-") or path.name == "entry_index.json":
+            if path.name.startswith("thumbnails-") or path.name in {
+                "entry_index.json", "telegram_metadata.json", "classification_index.json",
+                "classification_text_index.json",
+            }:
                 continue
             if path.is_file():
                 path.unlink()

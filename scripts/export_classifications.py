@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Export append-only classifier results as a compact browser-facing index."""
+"""Export classifier results as monthly browser indexes and catalog counts."""
 
 import argparse
 import json
@@ -81,7 +81,11 @@ def build_index(source: Path) -> dict:
     return index
 
 
-def export_index(source: Path, output: Path, text_output: Path | None = None) -> None:
+def export_index(source: Path, output: Path, text_output: Path | None = None, *, monthly: bool = True) -> None:
+    """Export monthly by default; the legacy format remains available explicitly."""
+    if monthly:
+        export_monthly_indexes(source, output, text_output)
+        return
     text_output = text_output or output.with_name("classification_text_index.json")
     # Preserve shipped indexes without raw results; migrate the old combined index.
     if not source.exists() and output.exists():
@@ -109,11 +113,73 @@ def write_index(output: Path, index: dict) -> None:
     temporary.replace(output)
 
 
+def write_monthly_indexes(output: Path, index: dict, *, filenames: bool = False) -> None:
+    """Write chunks beside entry indexes, including empty chunks for known months."""
+    months = {path.parent.relative_to(output.parent).as_posix(): {}
+              for path in output.parent.glob("[0-9][0-9][0-9][0-9]/[0-9][0-9]/entry_index.json")}
+    # Also clear stale chunks when a record is removed.
+    months.update({path.parent.relative_to(output.parent).as_posix(): {}
+                   for path in output.parent.glob(f"[0-9][0-9][0-9][0-9]/[0-9][0-9]/{output.name}")})
+    for key, value in index.items():
+        match = re.fullmatch(r"(\d{4})-(0[1-9]|1[0-2])-[^/]+", key) if filenames else re.fullmatch(r"(\d{4})/(0[1-9]|1[0-2])/[^/]+", key)
+        if not match:
+            raise ValueError(f"Invalid archive metadata key: {key!r}")
+        month = f"{match[1]}/{match[2]}"
+        months.setdefault(month, {})[key] = value
+    for month, chunk in sorted(months.items()):
+        write_index(output.parent / month / output.name, chunk)
+
+
+def read_monthly_indexes(output: Path) -> dict:
+    index = {}
+    for path in sorted(output.parent.glob(f"[0-9][0-9][0-9][0-9]/[0-9][0-9]/{output.name}")):
+        index.update(json.loads(path.read_text(encoding="utf-8")))
+    return index
+
+
+def export_monthly_indexes(source: Path, output: Path, text_output: Path | None = None) -> None:
+    text_output = text_output or output.with_name("classification_text_index.json")
+    if source.exists():
+        index = build_index(source)
+        compact = {key: {field: entry[field] for field in ("tags", "tags_de", "tags_en", "tag_format_version", "template") if field in entry}
+                   for key, entry in index.items()}
+        text = {key: {field: entry[field] for field in ("text", "description")} for key, entry in index.items()}
+    else:
+        # Migrate shipped indexes even when the private JSONL is unavailable.
+        compact = json.loads(output.read_text(encoding="utf-8")) if output.exists() else read_monthly_indexes(output)
+        text = json.loads(text_output.read_text(encoding="utf-8")) if text_output.exists() else read_monthly_indexes(text_output)
+        for key, entry in compact.items():
+            if "text" in entry:
+                text[key] = {field: entry.pop(field) for field in ("text", "description")}
+                entry.pop("template_status", None)
+    tag_counts, template_counts = {}, {}
+    for entry in compact.values():
+        # Match classificationTags/tagKey in the browser, including legacy tags.
+        fields = ("tags", "tags_de", "tags_en") if entry.get("tag_format_version", 0) >= 2 else ("tags",)
+        tags = {tag.strip().lower() for field in fields for tag in entry.get(field, []) if tag.strip()}
+        for tag in tags:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        if entry.get("template"):
+            name = entry["template"]
+            template_counts[name] = template_counts.get(name, 0) + 1
+    write_monthly_indexes(text_output, text)
+    write_monthly_indexes(output, compact)
+    write_index(output.with_name("classification_catalog.json"), {
+        # Singleton tags are implicit (count 1), avoiding a mostly-unique
+        # vocabulary payload that would rival the monthly metadata itself.
+        "tagCounts": {tag: count for tag, count in tag_counts.items() if count > 1},
+        "templateCounts": template_counts,
+    })
+    output.unlink(missing_ok=True)
+    text_output.unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=ROOT_DIR / "images/classifications.jsonl")
-    parser.add_argument("--output", type=Path, default=ROOT_DIR / "images/classification_index.json")
-    parser.add_argument("--text-output", type=Path, help="Text index path (defaults beside --output)")
+    parser.add_argument("--output", type=Path, default=ROOT_DIR / "images/classification_index.json",
+                        help="Base path; chunks are written under its parent in YYYY/MM directories")
+    parser.add_argument("--text-output", type=Path, help="Text index base path (defaults beside --output)")
     args = parser.parse_args()
     export_index(args.input, args.output, args.text_output)
 

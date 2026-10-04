@@ -3,7 +3,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.export_classifications import build_index, export_index
+from functools import partial
+from scripts.export_classifications import build_index, export_index as _export_index
+
+# Keep explicit legacy-format coverage; monthly exports have their own suite.
+export_index = partial(_export_index, monthly=False)
 
 
 def record(name="example.jpg", **changes):

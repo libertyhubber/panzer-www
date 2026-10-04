@@ -38,8 +38,8 @@ class IngestClassificationTests(unittest.TestCase):
         self.www = self.root / 'www'
         (self.www / 'images').mkdir(parents=True)
         self.output = self.www / 'images/classifications.jsonl'
-        self.compact = self.www / 'images/classification_index.json'
-        self.text = self.www / 'images/classification_text_index.json'
+        self.compact = self.www / 'images/2026/10/classification_index.json'
+        self.text = self.www / 'images/2026/10/classification_text_index.json'
         self.first = self.original('2026-10-01T000000_1.jpg')
         self.addCleanup(patch.stopall)
         patch.dict(os.environ, {'OPENAI_API_KEY': 'test-key'}).start()
@@ -157,7 +157,8 @@ class IngestClassificationTests(unittest.TestCase):
             self.classify()
         rows = [json.loads(line) for line in self.output.read_text().splitlines()]
         self.assertEqual([row['url'] for row in rows], [previous_url, self.url(self.first)])
-        self.assertIn('2025/01/old.jpg', json.loads(self.compact.read_text()))
+        self.assertIn('2025/01/old.jpg', json.loads(
+            (self.www / 'images/2025/01/classification_index.json').read_text()))
 
     def test_per_image_failure_keeps_successes_and_retry_only_classifies_failed_image(self):
         second = self.original('2026-10-01T000001_2.jpg')

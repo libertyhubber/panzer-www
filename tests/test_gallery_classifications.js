@@ -2,6 +2,19 @@ const assert = require('node:assert/strict')
 const { readFileSync } = require('node:fs')
 const { test } = require('node:test')
 const vm = require('node:vm')
+const { workerClass, workerSource } = require('./search_worker_harness')
+
+function searchContext() {
+    const context = {}
+    vm.runInNewContext(workerSource.slice(workerSource.indexOf('function normalizeSearch('),
+        workerSource.indexOf('function classificationTags(')), context)
+    const compile = context.compileSearch
+    context.compileSearch = query => {
+        const matcher = compile(query)
+        return fields => matcher((Array.isArray(fields) ? fields : [fields]).filter(Boolean).map(context.normalizeSearch))
+    }
+    return context
+}
 
 const appSource = readFileSync(`${__dirname}/../assets/app.js`, 'utf8')
 const flush = () => new Promise(resolve => setImmediate(resolve))
@@ -17,6 +30,8 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
     const thumbnailPattern = /<a href="[^"]*" class="thumbnail" style="[^"]*"[^>]*>/g
     const node = {
         clientWidth: options.clientWidth || 456,
+        attributes: {},
+        setAttribute(name, value) { this.attributes[name] = value },
         style: { setProperty(name, value) { this[name] = value } },
         querySelectorAll: selector => selector === '.thumbnail' ? thumbnails
             : selector === '.classification-tags' ? options.classificationDOM
@@ -186,15 +201,31 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
             requests.push(path)
             if (path === 'images/dir_index.json') return options.dirIndex || (extraArchive
                 ? { '2024/01': 2, '2024/02': 2, '2024/03': 2 } : { '2024/01': entries.length })
-            if (path === 'images/telegram_metadata.json') return options.telegram || { '2024-01-02_b.jpg': [42, 7, 100, 2] }
-            if (path === 'images/classification_index.json') {
+            if (/^images\/\d{4}\/\d{2}\/telegram_metadata\.json$/.test(path)) return options.telegram || { '2024-01-02_b.jpg': [42, 7, 100, 2] }
+            if (path === 'images/classification_catalog.json') {
                 const index = await classifications
-                return Object.fromEntries(Object.entries(index).map(([key, { text, description, ...entry }]) => [key, entry]))
+                const tagCounts = {}, templateCounts = {}
+                for (const entry of Object.values(index)) {
+                    const tags = [...(entry.tags || []), ...(entry.tags_de || []), ...(entry.tags_en || [])]
+                    for (const tag of new Set(tags.map(tag => tag.normalize('NFC').trim().toLowerCase()))) {
+                        tagCounts[tag] = (tagCounts[tag] || 0) + 1
+                    }
+                    if (entry.template) templateCounts[entry.template] = (templateCounts[entry.template] || 0) + 1
+                }
+                return { tagCounts: Object.fromEntries(Object.entries(tagCounts).filter(([, count]) => count > 1)), templateCounts }
             }
-            if (path === 'images/classification_text_index.json') {
+            if (/^images\/\d{4}\/\d{2}\/classification_index\.json$/.test(path)) {
+                const index = await classifications
+                const month = path.split('/').slice(1, 3).join('/') + '/'
+                return Object.fromEntries(Object.entries(index).filter(([key]) => key.startsWith(month))
+                    .map(([key, { text, description, ...entry }]) => [key, entry]))
+            }
+            if (/^images\/\d{4}\/\d{2}\/classification_text_index\.json$/.test(path)) {
                 if (options.textIndex) return options.textIndex
                 const index = await classifications
-                return Object.fromEntries(Object.entries(index).map(([key, { text, description }]) => [key, { text, description }]))
+                const month = path.split('/').slice(1, 3).join('/') + '/'
+                return Object.fromEntries(Object.entries(index).filter(([key]) => key.startsWith(month))
+                    .map(([key, { text, description }]) => [key, { text, description }]))
             }
             if (extraArchive && !path.includes('/2024/01/')) return entries.map(item => ({
                 ...item, name: item.name.replace('2024-01', path.includes('/2024/02/') ? '2024-02' : '2024-03'),
@@ -210,6 +241,7 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
     }
     node.getBoundingClientRect = () => ({ top: (options.galleryTop || 0) - context.document.documentElement.scrollTop })
     context.window = context
+    context.Worker = workerClass(path => context.fetchJson(path), options.worker || {})
     vm.runInNewContext(appSource, context)
     return { node, controls, resolveClassifications, rejectClassifications, listeners, lightbox, requests, imageRequests, context,
         get dialog() { return dialog }, get overlay() { return overlay } }
@@ -286,16 +318,16 @@ test('Telegram request waits for the initial gallery paint, then enriches visibl
     await flush()
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     assert.match(ui.node.innerHTML, /♥ —/)
-    assert.ok(!ui.requests.includes('images/telegram_metadata.json'))
+    assert.ok(!ui.requests.includes('images/2024/01/telegram_metadata.json'))
     assert.equal(frames.length, 0)
     sprite.onload()
     await flush()
     frames.shift()()
     await flush()
-    assert.ok(!ui.requests.includes('images/telegram_metadata.json'))
+    assert.ok(!ui.requests.includes('images/2024/01/telegram_metadata.json'))
     frames.shift()()
     await flush()
-    assert.ok(ui.requests.includes('images/telegram_metadata.json'))
+    assert.ok(ui.requests.includes('images/2024/01/telegram_metadata.json'))
     assert.match(ui.node.innerHTML, /♥ —/)
     release({ '2024-01-02_b.jpg': [42, 7, 100, 2] })
     await flush()
@@ -316,12 +348,12 @@ test('text request starts last and delayed text enables full-text search and too
     ui.resolveClassifications({ [imageId]: result, '2023/12/other.jpg': result })
     await flush()
     assert.match(ui.node.innerHTML, /class="classification-tag">Sesamstraße/)
-    assert.ok(!ui.requests.includes('images/classification_text_index.json'))
+    assert.ok(!ui.requests.includes('images/2024/01/classification_text_index.json'))
     releaseTelegram({ '2024-01-02_b.jpg': [42, 7, 100, 2] })
     await flush()
-    assert.equal(ui.requests.at(-1), 'images/classification_text_index.json')
+    assert.equal(ui.requests.at(-1), 'images/2024/01/classification_text_index.json')
     await applyFilters(ui, { 'filter-search': 'Sesamstraße' })
-    assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
+    assert.equal(ui.node.innerHTML, '', 'search waits for all matching fields so later OCR matches cannot shift results')
     assert.match(ui.controls['filter-status'].textContent, /Volltextsuche wird geladen/)
     await applyFilters(ui, { 'filter-search': 'OCR' })
     assert.equal(ui.node.innerHTML, '')
@@ -1279,6 +1311,61 @@ for (const failFirst of [false, true]) {
     })
 }
 
+test('search buffers older completed months and appends matches without moving existing cards', async () => {
+    const ui = gallery(true)
+    const fetchJson = ui.context.fetchJson
+    const held = new Map()
+    const paths = ['03', '02'].map(month => `images/2024/${month}/classification_text_index.json`)
+    const pending = new Map(paths.map(path => [path, new Promise(resolve => { held.set(path, resolve) })]))
+    ui.context.fetchJson = path => pending.get(path) || fetchJson(path)
+    ui.resolveClassifications(Object.fromEntries(['01', '02', '03'].map(month =>
+        [`2024/${month}/2024-${month}-02_b.jpg`, result])))
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'OCR' })
+    assert.equal(ui.node.innerHTML, '', 'older matches stay buffered while newest text is pending')
+    assert.match(ui.controls['filter-status'].textContent, /0 passende Bilder.*Archiv wird geladen/)
+    assert.equal(ui.node.attributes['aria-busy'], 'true')
+    held.get(paths[0])(await fetchJson(paths[0]))
+    await flush()
+    assert.match(ui.node.innerHTML, /2024-03-02_b.jpg/)
+    assert.doesNotMatch(ui.node.innerHTML, /2024-0[12]-02_b.jpg/)
+    const positions = cardPositions(ui)
+    assert.match(ui.controls['filter-status'].textContent, /1 passende Bilder.*Archiv wird geladen/)
+    held.get(paths[1])(await fetchJson(paths[1]))
+    await flush()
+    assert.deepEqual(cardPositions(ui).slice(0, positions.length), positions, 'published card positions stay fixed')
+    assert.equal(ui.controls['filter-status'].textContent, '3 passende Bilder')
+    assert.equal(ui.node.attributes['aria-busy'], 'false')
+    openGalleryItem(ui, 0)
+    assert.deepEqual(Array.from(ui.lightbox.options.dataSource, item => item.imageId),
+        ['03', '02', '01'].map(month => `2024/${month}/2024-${month}-02_b.jpg`))
+})
+
+test('incomplete-results notice retains a loading indicator while newer search chunks are pending', async () => {
+    const ui = gallery(true)
+    const fetchJson = ui.context.fetchJson
+    let release
+    const pending = new Promise(resolve => { release = resolve })
+    const newest = 'images/2024/03/classification_text_index.json'
+    ui.context.fetchJson = path => path === newest ? pending
+        : path === 'images/2024/01/classification_text_index.json' ? Promise.reject(new Error('offline'))
+        : fetchJson(path)
+    ui.resolveClassifications(Object.fromEntries(['01', '02', '03'].map(month =>
+        [`2024/${month}/2024-${month}-02_b.jpg`, result])))
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'OCR' })
+    assert.equal(ui.node.innerHTML, '')
+    assert.match(ui.controls['filter-status'].textContent, /unvollständig geladen.*Archiv wird geladen/)
+    assert.equal(ui.node.attributes['aria-busy'], 'true')
+    release(await fetchJson(newest))
+    await flush()
+    assert.match(ui.node.innerHTML, /2024-03-02_b.jpg/)
+    assert.match(ui.node.innerHTML, /2024-02-02_b.jpg/)
+    assert.match(ui.controls['filter-status'].textContent, /unvollständig geladen/)
+    assert.doesNotMatch(ui.controls['filter-status'].textContent, /Archiv wird geladen/)
+    assert.equal(ui.node.attributes['aria-busy'], 'false')
+})
+
 test('search renders partial matches and respects filter changes while an index is pending', async () => {
     const ui = gallery(true)
     await flush()
@@ -1340,9 +1427,7 @@ test('search covers older unloaded directories, descriptions and tags, not regex
 })
 
 test('search ignores unrequested punctuation as separators or joins, but keeps requested punctuation literal', () => {
-    const context = {}
-    vm.runInNewContext(appSource.slice(appSource.indexOf('function normalizeSearch('),
-        appSource.indexOf('function matchesFilters(')), context)
+    const context = searchContext()
     const matches = (text, query) => context.compileSearch(query)(text)
     for (const punctuation of ['_', '-', '‐', '‑', '–', '—', ',', '.', ':', ';', '/', '…', '「', '」']) {
         assert.equal(matches(`Foo${punctuation}Bar`, 'foo bar'), true, punctuation)
@@ -1370,9 +1455,7 @@ test('search ignores unrequested punctuation as separators or joins, but keeps r
 })
 
 test('search requires every term in any order and keeps quoted phrases within one field', () => {
-    const context = {}
-    vm.runInNewContext(appSource.slice(appSource.indexOf('function normalizeSearch('),
-        appSource.indexOf('function matchesFilters(')), context)
+    const context = searchContext()
     for (const [fields, query, expected] of [
         ['Steuern sind Diebstahl', 'steuern diebstahl', true],
         ['Steuern sind Diebstahl', 'diebstahl steuern', true],
@@ -1454,9 +1537,7 @@ test('multi-term and quoted searches combine metadata filters and survive shared
 })
 
 test('search normalizes German umlauts in queries and entries without changing displayed text or URLs', async () => {
-    const context = {}
-    vm.runInNewContext(appSource.slice(appSource.indexOf('function normalizeSearch('),
-        appSource.indexOf('function matchesFilters(')), context)
+    const context = searchContext()
     for (const value of ['äöü', 'ÄÖÜ', 'aou', 'AOU', 'a\u0308o\u0308u\u0308']) {
         assert.equal(context.normalizeSearch(value), 'aou')
     }
@@ -1638,8 +1719,9 @@ test('overlapping cards preserve fitted tags and counters throughout scroll and 
 test('fitted tag previews are invalidated by card width or classification changes', async () => {
     const entries = manyEntries(20)
     const measurements = new Map()
+    const workers = []
     const ui = gallery(false, [], entries, 'localhost', {
-        classificationDOM: true, tagMeasurements: measurements,
+        classificationDOM: true, tagMeasurements: measurements, worker: { instances: workers },
     })
     const tags = ['Anarchie', 'Freiheit', 'Steuern', 'Widerstand', 'Gesellschaft']
     ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
@@ -1654,6 +1736,9 @@ test('fitted tag previews are invalidated by card width or classification change
     await clock.settle()
     assert.equal(measurements.get(imageId), initialMeasurements + 1, 'narrow cards must repack their tags')
     tags.push('Selbstbestimmung')
+    // Worker messages are cloned; refresh the month's classification explicitly.
+    workers[0].onmessage({ data: { type: 'metadata', dirName: '2024/01', kind: 'classification',
+        data: { [imageId]: { tags, template: null } } } })
     clock.scroll(0)
     await clock.settle()
     assert.equal(measurements.get(imageId), initialMeasurements + 2, 'changed tag content must repack too')
@@ -2595,4 +2680,139 @@ test('closing while a neighboring month is loading cannot resurrect the selected
     release(await originalFetch('images/2024/01/entry_index.json'))
     await flush()
     assert.equal(urlParams(ui).get('image'), null)
+})
+
+test('browsing requests only loaded months, filters expand to the full catalog without duplicate metadata requests', async () => {
+    const ui = gallery(true)
+    ui.resolveClassifications({
+        '2024/01/2024-01-02_b.jpg': { ...result, text: 'older month only' },
+        '2024/03/2024-03-02_b.jpg': result,
+    })
+    await flush()
+    await flush()
+    assert.ok(ui.requests.includes('images/classification_catalog.json'))
+    for (const kind of ['telegram_metadata', 'classification_index', 'classification_text_index']) {
+        assert.ok(ui.requests.includes(`images/2024/03/${kind}.json`))
+        assert.ok(!ui.requests.includes(`images/2024/01/${kind}.json`))
+        assert.ok(!ui.requests.includes(`images/${kind}.json`))
+    }
+    await applyFilters(ui, { 'filter-search': 'older month only' })
+    assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
+    assert.doesNotMatch(ui.node.innerHTML, /2024-03-02_b.jpg/)
+    for (const kind of ['telegram_metadata', 'classification_index', 'classification_text_index']) {
+        for (const month of ['01', '02', '03']) {
+            assert.equal(ui.requests.filter(path => path === `images/2024/${month}/${kind}.json`).length, 1)
+        }
+    }
+})
+
+test('a failed metadata month keeps images and other chunks, and a filter change retries it', async () => {
+    const ui = gallery(true)
+    ui.resolveClassifications({ '2024/01/2024-01-02_b.jpg': { ...result, text: 'older month only' } })
+    await flush()
+    const fetchJson = ui.context.fetchJson
+    const failedPath = 'images/2024/01/classification_text_index.json'
+    let attempts = 0
+    ui.context.fetchJson = path => {
+        if (path === failedPath && attempts++ === 0) return Promise.reject(new Error('offline'))
+        return fetchJson(path)
+    }
+    await applyFilters(ui, { 'filter-search': 'older month only' })
+    assert.equal(ui.node.innerHTML, '')
+    assert.match(ui.controls['filter-status'].textContent, /Archiv unvollständig/)
+    await applyFilters(ui, { 'filter-search': 'older month only' })
+    assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
+    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(attempts, 2)
+})
+
+test('worker results from superseded queries cannot replace newer filters or cleared filters', async () => {
+    const workers = [], held = []
+    let oldId
+    const ui = gallery(false, [], null, 'localhost', { worker: {
+        instances: workers,
+        deliver(data, deliver) {
+            if (data.type === 'results') {
+                oldId ??= data.id
+                if (data.id === oldId) { held.push(deliver); return }
+            }
+            queueMicrotask(deliver)
+        },
+    } })
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'OCR' })
+    assert.equal(ui.controls['filter-status'].textContent, 'Suche läuft…')
+    assert.ok(held.length)
+    await applyFilters(ui, { 'filter-search': 'absent' })
+    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    for (const deliver of held) deliver()
+    await flush()
+    assert.equal(ui.node.innerHTML, '')
+    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    const queryCount = () => workers[0].sent.filter(data => data.type === 'query').length
+    assert.equal(queryCount(), 2)
+    const clock = scrollClock(ui)
+    clock.scroll(0)
+    await clock.settle()
+    assert.equal(queryCount(), 2, 'scrolling must not re-run archive filtering')
+    ui.controls['filter-search-clear'].handler()
+    await clock.settle()
+    for (const deliver of held) deliver()
+    await flush()
+    assert.equal(thumbnailCount(ui), 2)
+    assert.equal(ui.controls['filter-status'].textContent, '')
+})
+
+test('worker construction failure leaves browsing usable and reports unavailable search', async () => {
+    const ui = gallery(false, [], null, 'localhost', { worker: { unavailable: true } })
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    assert.equal(thumbnailCount(ui), 2)
+    await applyFilters(ui, { 'filter-search': 'OCR' })
+    assert.match(ui.controls['filter-status'].textContent, /Suche nicht verfügbar/)
+    assert.equal(ui.node.innerHTML, '')
+    await applyFilters(ui, { 'filter-search': '' })
+    assert.equal(thumbnailCount(ui), 2)
+})
+
+test('asynchronous worker startup failure falls back to browsing without hanging initialization', async () => {
+    const workers = []
+    const ui = gallery(false, [], null, 'localhost', { worker: {
+        instances: workers,
+        deliver(data, deliver) {
+            if (data.type !== 'fetched') queueMicrotask(deliver)
+        },
+    } })
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    workers[0].onerror({ message: 'Worker script blocked', preventDefault() {} })
+    await flush()
+    assert.equal(workers[0].terminated, true)
+    assert.equal(thumbnailCount(ui), 2)
+    assert.equal(ui.context.history.scrollRestoration, 'manual')
+})
+
+test('a worker crash during filtering settles the query and a new filter retries in a fresh worker', async () => {
+    const workers = []
+    let withhold = true
+    const ui = gallery(false, [], null, 'localhost', { worker: {
+        instances: workers,
+        deliver(data, deliver) {
+            if (withhold && data.type === 'results') return
+            queueMicrotask(deliver)
+        },
+    } })
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'OCR' })
+    assert.equal(ui.controls['filter-status'].textContent, 'Suche läuft…')
+    workers[0].onerror({ message: 'Worker crashed', preventDefault() {} })
+    await flush()
+    assert.match(ui.controls['filter-status'].textContent, /Suche nicht verfügbar/)
+    withhold = false
+    await applyFilters(ui, { 'filter-search': 'OCR' })
+    assert.equal(workers.length, 2)
+    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
 })

@@ -24,6 +24,14 @@ let galleryScrolling = false
 let galleryFramePending = false
 let galleryRenderVersion = 0
 let fittedClassifications = new Map()
+const metadataMonths = new Map()
+const metadataFailures = new Set()
+const metadataEnabled = new Set()
+const metadataKinds = {
+    telegram: ['telegram_metadata.json', 'telegramMetadata', 'telegramStatus'],
+    classification: ['classification_index.json', 'classificationIndex', 'classificationStatus'],
+    text: ['classification_text_index.json', 'classificationTextIndex', 'classificationTextStatus'],
+}
 
 const GALLERY_STATE = {
     'webpSupported': false,
@@ -43,13 +51,149 @@ const GALLERY_STATE = {
     'lastRenderState': null,
     'dataSource': null,
     'allItemsPromise': null,
-    'allItemsComplete': false,
+    'allItemsComplete': false, // All archive requests settled, including failures.
     'allItemsError': false,
     'filteredItems': null,
     'filters': { minReactions: 0, template: '', search: '' },
     'filterVersion': 0,
     'navigationNotice': '',
+    'workerError': false,
 }
+
+let searchWorker = null
+let workerRequestId = 0
+const workerRequests = new Map()
+let archiveResolve = null
+let filterQuery = null
+const pageFetchJson = window.fetchJson
+
+function workerFailed(error) {
+    console.warn('Gallery search worker unavailable', error)
+    searchWorker?.terminate()
+    searchWorker = null
+    GALLERY_STATE.workerError = true
+    GALLERY_STATE.allItemsError = true
+    GALLERY_STATE.allItemsComplete = true
+    GALLERY_STATE.filteredItems = []
+    for (const request of workerRequests.values()) {
+        pageFetchJson(request.path).then(request.resolve, request.reject)
+    }
+    workerRequests.clear()
+    archiveResolve?.()
+    archiveResolve = null
+    filterQuery?.resolve()
+    GALLERY_STATE.lastRenderState = null
+    updateGallery()
+}
+
+function getSearchWorker() {
+    if (!searchWorker && !GALLERY_STATE.workerError) {
+        try {
+            const worker = new Worker(`/assets/search-worker.js?v=2&cb=${CB}`)
+            searchWorker = worker
+            worker.onmessage = event => { if (searchWorker === worker) workerMessage(event) }
+            worker.onerror = event => {
+                event.preventDefault?.()
+                if (searchWorker === worker) workerFailed(new Error(event.message || 'Worker failed'))
+            }
+            worker.onmessageerror = () => {
+                if (searchWorker === worker) workerFailed(new Error('Invalid worker message'))
+            }
+            worker.postMessage({ type: 'init', baseURL: location.href, cacheBust: CB })
+        } catch (error) {
+            workerFailed(error)
+        }
+    }
+    return searchWorker
+}
+
+// Browsing and archive searches share the worker's HTTP/JSON cache. If workers
+// are unavailable, normal browsing still works; do not silently scan on the UI thread.
+async function fetchJson(path) {
+    const worker = getSearchWorker()
+    if (!worker) return pageFetchJson(path)
+    const id = ++workerRequestId
+    return new Promise((resolve, reject) => {
+        workerRequests.set(id, { resolve, reject, path })
+        worker.postMessage({ type: 'fetch', id, path })
+    })
+}
+
+function applyMonthMetadata(dirName, kind, data) {
+    const key = `${kind}:${dirName}`
+    const [, field, status] = metadataKinds[kind]
+    Object.assign(GALLERY_STATE[field], data)
+    metadataFailures.delete(key)
+    GALLERY_STATE[status] = [...metadataFailures].some(key => key.startsWith(`${kind}:`))
+        ? 'unavailable' : 'ready'
+    if (kind === 'telegram') {
+        // Only this month's entries need enrichment, not the entire archive.
+        for (const filename of Object.keys(data)) {
+            const item = monthItems.get(`${dirName}/${filename}`)
+            if (item) Object.assign(item, telegramFields(filename))
+        }
+    }
+}
+
+function workerMessage({ data }) {
+    if (data.type === 'fetched') {
+        const request = workerRequests.get(data.id)
+        if (!request) return
+        workerRequests.delete(data.id)
+        if (data.error) request.reject(new Error(data.error))
+        else request.resolve(data.value)
+    } else if (data.type === 'month') {
+        storeMonthItems(data.dirName, data.start, data.entries)
+    } else if (data.type === 'metadata') {
+        if (data.error) {
+            metadataFailures.add(`${data.kind}:${data.dirName}`)
+            GALLERY_STATE[metadataKinds[data.kind][2]] = 'unavailable'
+        } else {
+            applyMonthMetadata(data.dirName, data.kind, data.data)
+            metadataMonths.set(`${data.kind}:${data.dirName}`, Promise.resolve(true))
+        }
+    } else if (data.type === 'loaded') {
+        GALLERY_STATE.allItemsComplete = true
+        GALLERY_STATE.allItemsError = data.error
+        archiveResolve?.()
+        archiveResolve = null
+    } else if (data.type === 'results') {
+        // Results for old filters must never replace a newer query or history entry.
+        if (!filtersActive() || data.id !== GALLERY_STATE.filterVersion || data.id !== filterQuery?.version) return
+        // Resolve IDs to existing items; do not clone the entire matching catalog.
+        GALLERY_STATE.filteredItems = data.indices.map(index => GALLERY_STATE.dataSource[index])
+        GALLERY_STATE.allItemsComplete = data.complete
+        GALLERY_STATE.allItemsError = data.error
+        for (const [kind, status] of Object.entries(data.statuses)) {
+            GALLERY_STATE[metadataKinds[kind][2]] = status
+        }
+        GALLERY_STATE.lastRenderState = null
+        filterQuery.resolve()
+        updateGallery()
+    } else if (data.type === 'fatal') {
+        workerFailed(new Error(data.error))
+    }
+}
+
+function cancelFilterQuery() {
+    filterQuery?.resolve()
+    if (!filtersActive()) searchWorker?.postMessage({ type: 'cancel' })
+}
+
+function requestFilter() {
+    const version = GALLERY_STATE.filterVersion
+    if (filterQuery?.version === version) return filterQuery.promise
+    filterQuery?.resolve()
+    let resolve
+    const promise = new Promise(done => { resolve = done })
+    filterQuery = { version, promise, resolve }
+    const worker = getSearchWorker()
+    if (worker) worker.postMessage({ type: 'query', id: version, filters: GALLERY_STATE.filters })
+    else resolve()
+    return promise
+}
+
+const monthItems = new Map()
 
 // Only durable browsing state belongs in the URL, not transient overlays or indexes.
 // Image filenames remain stable when newer images are added to the archive.
@@ -145,6 +289,7 @@ async function restoreNavigation(navigation) {
         search: normalizeSearch(navigation.search),
     }
     setTemplateControl(navigation.template)
+    cancelFilterQuery()
     GALLERY_STATE.filterVersion += 1
     GALLERY_STATE.filteredItems = null
     GALLERY_STATE.lastRenderState = null
@@ -228,9 +373,17 @@ function lightboxCloseHandler() {
     writeNavigation(true)
 }
 
-async function loadMonthItems(dirName, dirStartIndex) {
+async function loadMonthItems(dirName, dirStartIndex, enrich = true) {
     // Local indexes and sprites are generated together; only originals use IMG_HOSTS.
     const entryIndex = await fetchJson(`images/${dirName}/entry_index.json`)
+    const items = storeMonthItems(dirName, dirStartIndex, entryIndex)
+    // Browsing never waits for optional metadata. Enable each kind only after
+    // its initial paint gate, then enrich new months as they are encountered.
+    if (enrich) for (const kind of metadataEnabled) loadMonthMetadata(dirName, kind)
+    return items
+}
+
+function storeMonthItems(dirName, dirStartIndex, entryIndex) {
     const dataSourceItems = []
     const fallbackHost = location.protocol + "//" + location.host
     const host = IMG_HOSTS[dirName.split("/")[0]] || fallbackHost
@@ -259,6 +412,7 @@ async function loadMonthItems(dirName, dirStartIndex) {
     }
     for (const item of dataSourceItems) {
         GALLERY_STATE.dataSource[item.galleryIndex] = item
+        monthItems.set(item.imageId, item)
     }
     return dataSourceItems
 }
@@ -362,17 +516,6 @@ function classificationTags(classification) {
         })
 }
 
-function countCatalogTags(index) {
-    const counts = new Map()
-    for (const classification of Object.values(index)) {
-        // Count images, not duplicate tags within the same image.
-        for (const key of new Set(classificationTags(classification).map(tagKey))) {
-            if (key) counts.set(key, (counts.get(key) || 0) + 1)
-        }
-    }
-    return counts
-}
-
 function classificationHTML(classification, imageId) {
     if (!classification) {
         const message = GALLERY_STATE.classificationStatus === 'loading'
@@ -392,7 +535,8 @@ function classificationHTML(classification, imageId) {
             ...(classification.tag_format_version >= 2 ? classification.tags : [])].map(tagKey)) : null
     const overlayOnly = tag => germanTags !== null
         ? !germanTags.has(tagKey(tag)) : isClearlyEnglishTag(tag)
-    const frequency = tag => GALLERY_STATE.tagCounts.get(tagKey(tag)) || 0
+    // The catalog omits singleton tags to keep the global summary small.
+    const frequency = tag => GALLERY_STATE.tagCounts.get(tagKey(tag)) || 1
     const allTags = classificationTags(classification)
     const sortedTags = [...allTags]
         .sort((a, b) => frequency(b) - frequency(a) || a.localeCompare(b, 'de'))
@@ -533,40 +677,58 @@ function enhanceThumbnails(items, filtered) {
     loadOriginals()
 }
 
+async function loadMonthMetadata(dirName, kind) {
+    const key = `${kind}:${dirName}`
+    if (!metadataMonths.has(key)) {
+        const [filename, , status] = metadataKinds[kind]
+        metadataMonths.set(key, (async () => {
+            try {
+                applyMonthMetadata(dirName, kind, await fetchJson(`images/${dirName}/${filename}`))
+                return true
+            } catch (error) {
+                metadataFailures.add(key)
+                GALLERY_STATE[status] = 'unavailable'
+                console.warn(`Could not load ${kind} metadata for ${dirName}`, error)
+                return false
+            } finally {
+                GALLERY_STATE.lastRenderState = null
+                updateGallery()
+            }
+        })())
+    }
+    return metadataMonths.get(key)
+}
+
+async function enableMetadata(kind) {
+    metadataEnabled.add(kind)
+    const months = new Set(GALLERY_STATE.dataSource.filter(Boolean)
+        .map(item => item.imageId.split('/').slice(0, 2).join('/')))
+    await Promise.all([...months].map(month => loadMonthMetadata(month, kind)))
+}
+
 async function loadTelegramMetadata(firstThumbSrc) {
     // Share the first image's load/paint gate with lazy quality enhancement.
     if (firstThumbSrc) await galleryImagePaint(firstThumbSrc)
     else await afterImagePaint()
-    try {
-        GALLERY_STATE.telegramMetadata = await fetchJson('images/telegram_metadata.json')
-        GALLERY_STATE.telegramStatus = 'ready'
-        for (const item of GALLERY_STATE.dataSource) {
-            if (item) Object.assign(item, telegramFields(item.imageId.split('/').pop()))
-        }
-    } catch (error) {
-        GALLERY_STATE.telegramStatus = 'unavailable'
-        console.warn('Could not load Telegram metadata', error)
-    }
-    GALLERY_STATE.filteredItems = null
+    await enableMetadata('telegram')
     GALLERY_STATE.lastRenderState = null
     await updateGallery()
 }
 
 async function loadClassifications() {
+    const monthsReady = enableMetadata('classification')
     try {
-        GALLERY_STATE.classificationIndex = await fetchJson('images/classification_index.json')
-        GALLERY_STATE.tagCounts = countCatalogTags(GALLERY_STATE.classificationIndex)
-        GALLERY_STATE.classificationStatus = 'ready'
+        const catalog = await fetchJson('images/classification_catalog.json')
+        GALLERY_STATE.tagCounts = new Map(Object.entries(catalog.tagCounts))
+        GALLERY_STATE.templateCounts = new Map(Object.entries(catalog.templateCounts))
     } catch (error) {
+        metadataFailures.add('classification:catalog')
         GALLERY_STATE.classificationStatus = 'unavailable'
-        console.warn('Could not load image classifications', error)
+        console.warn('Could not load classification catalog', error)
     }
+    await monthsReady
     const select = document.getElementById('filter-template')
-    const templateCounts = new Map()
-    for (const item of Object.values(GALLERY_STATE.classificationIndex)) {
-        if (item.template) templateCounts.set(item.template, (templateCounts.get(item.template) || 0) + 1)
-    }
-    GALLERY_STATE.templateCounts = templateCounts
+    const templateCounts = GALLERY_STATE.templateCounts
     const templates = [...templateCounts.entries()]
         .filter(([, count]) => count >= 5)
         .sort(([a], [b]) => a.localeCompare(b))
@@ -574,23 +736,16 @@ async function loadClassifications() {
         templateOptionHTML(name, count)).join('')
     setTemplateControl(GALLERY_STATE.filters.template)
     select.disabled = GALLERY_STATE.classificationStatus !== 'ready'
-    GALLERY_STATE.filteredItems = null
+    GALLERY_STATE.lastRenderState = null
     await updateGallery()
 }
 
 async function loadClassificationText() {
-    try {
-        GALLERY_STATE.classificationTextIndex = await fetchJson('images/classification_text_index.json')
-        GALLERY_STATE.classificationTextStatus = 'ready'
-    } catch (error) {
-        GALLERY_STATE.classificationTextStatus = 'unavailable'
-        console.warn('Could not load image classification text', error)
-    }
+    await enableMetadata('text')
     const search = document.getElementById('filter-search')
     search.placeholder = GALLERY_STATE.classificationTextStatus === 'ready'
         ? 'Bildtexte, Beschreibungen und Schlagwörter durchsuchen'
         : 'Schlagwörter durchsuchen (Volltextsuche nicht verfügbar)'
-    GALLERY_STATE.filteredItems = null
     GALLERY_STATE.lastRenderState = null
     await updateGallery()
 }
@@ -602,40 +757,12 @@ function filtersActive() {
 
 async function loadAllItems() {
     if (!GALLERY_STATE.allItemsPromise) {
+        const worker = getSearchWorker()
+        if (!worker) return
         GALLERY_STATE.allItemsError = false
-        const refresh = () => {
-            GALLERY_STATE.filteredItems = null
-            GALLERY_STATE.lastRenderState = null
-            if (filtersActive()) updateGallery()
-        }
-        GALLERY_STATE.allItemsPromise = (async () => {
-            const months = []
-            let offset = 0
-            for (const dirName of [...GALLERY_STATE.dirNames].reverse()) {
-                if (GALLERY_STATE.dirIndex[dirName] > 0) months.push({ dirName, start: offset })
-                offset += GALLERY_STATE.dirIndex[dirName]
-            }
-            let cursor = 0
-            // Each slot handles one month, independently of neighboring requests.
-            await Promise.all(Array.from({ length: Math.min(6, months.length) }, async () => {
-                while (cursor < months.length) {
-                    const { dirName, start } = months[cursor++]
-                    try {
-                        await loadMonthItems(dirName, start)
-                    } catch (error) {
-                        GALLERY_STATE.allItemsError = true
-                        console.warn(`Could not load archive month ${dirName}`, error)
-                    }
-                    refresh()
-                }
-            }))
-            GALLERY_STATE.allItemsComplete = !GALLERY_STATE.allItemsError
-            refresh()
-        })().catch(error => {
-            GALLERY_STATE.allItemsError = true
-            console.warn('Could not load archive for filtering', error)
-            refresh()
-        })
+        GALLERY_STATE.allItemsComplete = false
+        GALLERY_STATE.allItemsPromise = new Promise(resolve => { archiveResolve = resolve })
+        worker.postMessage({ type: 'load', dirIndex: GALLERY_STATE.dirIndex })
     }
     await GALLERY_STATE.allItemsPromise
 }
@@ -643,42 +770,6 @@ async function loadAllItems() {
 function normalizeSearch(value) {
     return value.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase()
         .replace(/[äöü]/g, char => ({ ä: 'a', ö: 'o', ü: 'u' })[char])
-}
-
-function compileSearch(query) {
-    // Double quotes group a phrase; an unfinished quote extends to the end of input.
-    const clauses = [...normalizeSearch(query).matchAll(/"([^"]*)(?:"|$)|([^\s"]+)/gu)]
-        .map(match => (match[1] ?? match[2]).trim()).filter(Boolean)
-    const escapeRegex = char => char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const matchers = clauses.map(clause => {
-        const punctuation = [...new Set(clause.match(/\p{P}/gu) || [])].map(escapeRegex).join('|')
-        // Keep punctuation named in each clause literal; ignore all other punctuation.
-        const ignored = punctuation ? `(?!(?:${punctuation}))\\p{P}` : '\\p{P}'
-        // Punctuation can separate words or join letters, but phrase spaces stay significant.
-        const pattern = [...clause].map(char => char === ' '
-            ? `(?:\\s|${ignored})+` : escapeRegex(char)).join(`(?:${ignored})*`)
-        const regex = new RegExp(pattern, 'u')
-        return text => text.includes(clause) || regex.test(text)
-    })
-    return values => {
-        const fields = (Array.isArray(values) ? values : [values]).filter(Boolean).map(normalizeSearch)
-        // Terms may match different fields; phrases must remain within one field or tag.
-        return matchers.length > 0 && matchers.every(matches => fields.some(matches))
-    }
-}
-
-function matchesFilters(item, searchMatcher) {
-    const filters = GALLERY_STATE.filters
-    if (filters.minReactions > 0 && (item.reactions ?? 0) < filters.minReactions) return false
-    const classification = GALLERY_STATE.classificationIndex[item.imageId]
-    if (filters.template && classification?.template !== filters.template) return false
-    if (filters.search) {
-        const details = GALLERY_STATE.classificationTextIndex[item.imageId]
-        const fields = [details?.text, details?.description,
-            classification?.template, ...classificationTags(classification)]
-        if (!searchMatcher(fields)) return false
-    }
-    return true
 }
 
 function updateSearchControl() {
@@ -710,7 +801,16 @@ function filterChangeHandler() {
     }
     window.scrollTo(0, 0)
     writeNavigation(true)
-    if (GALLERY_STATE.allItemsError) GALLERY_STATE.allItemsPromise = null
+    cancelFilterQuery()
+    if (GALLERY_STATE.allItemsError) {
+        GALLERY_STATE.allItemsPromise = null
+        GALLERY_STATE.workerError = false
+        filterQuery?.resolve()
+        filterQuery = null
+        for (const [key, promise] of metadataMonths) {
+            promise.then(loaded => { if (!loaded) metadataMonths.delete(key) })
+        }
+    }
     GALLERY_STATE.filterVersion += 1
     galleryScrolling = false
     galleryRenderVersion += 1
@@ -754,23 +854,26 @@ async function updateGallery() {
     const filtered = filtersActive()
     const status = document.getElementById('filter-status')
     if (filtered && !GALLERY_STATE.filteredItems) {
-        // Start the bounded background loader, but render already available matches.
+        // Await only the first response; later archive matches arrive progressively.
+        document.getElementById('gallery').setAttribute?.('aria-busy', 'true')
+        status.textContent = 'Suche läuft…'
         loadAllItems()
-        const searchMatcher = compileSearch(GALLERY_STATE.filters.search)
-        GALLERY_STATE.filteredItems = GALLERY_STATE.dataSource.filter(item => matchesFilters(item, searchMatcher))
-            .map((item, galleryIndex) => ({ ...item, galleryIndex }))
+        await requestFilter()
+        if (renderVersion !== galleryRenderVersion || version !== GALLERY_STATE.filterVersion) return
     }
-    const totalEntries = filtered ? GALLERY_STATE.filteredItems.length : GALLERY_STATE.totalEntries
+    const totalEntries = filtered ? (GALLERY_STATE.filteredItems || []).length : GALLERY_STATE.totalEntries
+    galleryNode.setAttribute?.('aria-busy', String(filtered && !GALLERY_STATE.allItemsComplete))
     const totalRows = Math.ceil(totalEntries / tnColumns)
     galleryNode.style.height = (totalRows * rowHeight) + "px"
     status.textContent = filtered
         ? `${totalEntries} passende Bilder` + (GALLERY_STATE.allItemsError
-            ? ' (Archiv unvollständig geladen. Ändere einen Filter, um es erneut zu versuchen.)'
-            : !GALLERY_STATE.allItemsComplete ? ' (Archiv wird geladen…)' : '') + (GALLERY_STATE.filters.search && GALLERY_STATE.classificationStatus !== 'ready'
+            ? ' (Archiv unvollständig geladen. Ändere einen Filter, um es erneut zu versuchen.)' : '') +
+            (!GALLERY_STATE.allItemsComplete ? ' (Archiv wird geladen…)' : '') + (GALLERY_STATE.filters.search && GALLERY_STATE.classificationStatus !== 'ready'
             ? ' (Schlagwortsuche benötigt Klassifizierungsdaten)' : '') + (GALLERY_STATE.filters.search && GALLERY_STATE.classificationTextStatus !== 'ready'
             ? GALLERY_STATE.classificationTextStatus === 'loading' ? ' (Volltextsuche wird geladen…)' : ' (Volltextsuche nicht verfügbar)' : '') + (GALLERY_STATE.filters.minReactions > 0 && GALLERY_STATE.telegramStatus !== 'ready'
             ? GALLERY_STATE.telegramStatus === 'loading' ? ' (Reaktionen werden geladen…)' : ' (Reaktionen nicht verfügbar)' : '')
         : ''
+    if (filtered && GALLERY_STATE.workerError) status.textContent = 'Suche nicht verfügbar. Bitte lade die Seite neu.'
     status.textContent += GALLERY_STATE.navigationNotice
 
     const scrollTop = document.documentElement.scrollTop
@@ -835,6 +938,7 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
     for (var i = 0; i < ds.dataSourceItems.length; i++) {
         var item = ds.dataSourceItems[i]
         const index = ds.dirStartIndex + i
+        const galleryIndex = filtered ? index : item?.galleryIndex
         const itemStyles = [
             `top: ${Math.floor(index / tnColumns) * rowHeight}px;`,
             `left: ${marginLeft + (index % tnColumns) * columnWidth}px;`,
@@ -877,7 +981,7 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
             `href="${item.src}"`,
             `class="thumbnail"`,
             `style="${thumbStyles.join(' ')}"`,
-            `-data-gallery-idx="${item.galleryIndex}"`,
+            `-data-gallery-idx="${galleryIndex}"`,
             `aria-label="${escapeHtml(imageLabel)}"`,
             `title="${escapeHtml(imageLabel)}"`,
         ]
@@ -896,7 +1000,7 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
             (item.views === null ? '' : `<span title="Telegram-Aufrufe" aria-label="${item.views} Aufrufe">◉ ${formatCount(item.views)}</span>`) +
             (item.comments === null ? '' : `<span title="Telegram-Kommentare" aria-label="${item.comments} Kommentare">💬 ${formatCount(item.comments)}</span>`) +
             `</div>${telegramLink}` +
-            (DEBUG_ENABLED ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${item.galleryIndex}" aria-haspopup="dialog">debug</button>` : '') +
+            (DEBUG_ENABLED ? `<button type="button" class="thumbnail-debug" data-gallery-idx="${galleryIndex}" aria-haspopup="dialog">debug</button>` : '') +
             (preview.html || classificationSource) +
             `</div></article>`
         )

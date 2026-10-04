@@ -13,7 +13,10 @@ from unittest.mock import patch
 
 from scripts import backfill_tag_languages as migration
 from scripts import classify_images as classifier
-from scripts.export_classifications import export_index
+from functools import partial
+from scripts.export_classifications import export_index as _export_index
+
+export_index = partial(_export_index, monthly=False)
 from tests.test_classify_images import record, URL
 
 

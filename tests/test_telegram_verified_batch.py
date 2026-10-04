@@ -227,7 +227,7 @@ class VerifiedBatchTests(unittest.TestCase):
             posts.append(msg)
         client = FakeClient(posts)
         client.download_media = AsyncMock(side_effect=lambda photo, *args, **kwargs: data[photo.id])
-        known = {'name': 'existing.jpg', 'trct': 17, 'tview': 300}
+        known = {'name': '2022-01-01_existing.jpg', 'trct': 17, 'tview': 300}
         messages, state = {99999: dict(known)}, {}
         output = io.StringIO()
         with patch.object(backfill, 'STATE_PATH', self.root / 'state.json'), \
@@ -247,7 +247,9 @@ class VerifiedBatchTests(unittest.TestCase):
         self.assertEqual(messages[99999], known)
         self.assertEqual(state['history_plan']['remaining'], [])
         self.assertEqual(output.getvalue().count('Telegram photo cache hit:'), 43)
-        metadata = json.loads((self.root / 'metadata.json').read_text())
+        from scripts.export_classifications import read_monthly_indexes
+        metadata = read_monthly_indexes(self.root / 'metadata.json')
+        self.assertFalse((self.root / 'metadata.json').exists())
         for row in ROWS:
             record = messages[row['message_id']]
             self.assertEqual(record['name'], row['name'])
