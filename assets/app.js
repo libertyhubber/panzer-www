@@ -402,6 +402,9 @@ function storeMonthItems(dirName, dirStartIndex, entryIndex) {
             width: entry.w,
             height: entry.h,
             bg: typeof entry.bg === 'string' && /^[0-9a-f]{3}$/i.test(entry.bg) ? entry.bg : '000',
+            gradient: galleryGradient(entry),
+            originalSize: galleryOriginalSize(entry.w, entry.h),
+            originalPaddingClip: galleryOriginalPaddingClip(entry.w, entry.h),
             bgOffsetX: (localIndex % SHEET_COLUMNS) * stride,
             bgOffsetY: Math.floor(localIndex / SHEET_COLUMNS) * stride,
             thumbSrc: thumbSrc,
@@ -561,12 +564,12 @@ function telegramFields(filename) {
 }
 
 function supportsWebp() {
-    // Test lossy WebP decoding, rather than browser versions or MIME support.
+    // Require lossy WebP WITH alpha, rather than browser versions or MIME support.
     return new Promise(resolve => {
         const image = new Image()
         image.onload = () => resolve(image.width === 1 && image.height === 1)
         image.onerror = () => resolve(false)
-        image.src = 'data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAsBIJaQAA3AA/vjMoAA='
+        image.src = 'data:image/webp;base64,UklGRlYAAABXRUJQVlA4WAoAAAAQAAAAAAAAAAAAQUxQSAIAAAAAgFZQOCAuAAAAkAEAnQEqAQABAALASCWgAnS6AAOYAP7upj/8Buvi2mX/3OB/3OB/3OB/EgAAAA=='
     })
 }
 
@@ -615,38 +618,83 @@ function galleryImagePaint(src) {
 }
 
 function usesOriginal(item, filtered) {
+    if (DEBUG_ENABLED) return false
     return filtered || !GALLERY_STATE.webpSupported ||
         GALLERY_IMAGES.get(item.src)?.status === 'loaded' ||
         GALLERY_IMAGES.get(item.thumbSrc)?.status === 'failed'
 }
 
+function galleryGradient(entry) {
+    const { w, h, bg } = entry
+    if (!(w > 0 && h > 0) || typeof bg !== 'string' || !/^[0-9a-f]{3}$/i.test(bg)) return ''
+    const start = 50 * (1 - Math.min(w, h) / Math.max(w, h))
+    const end = 100 - start
+    // Extend black padding 2 CSS pixels beneath the image to hide rounding seams.
+    const firstStop = `calc(${start}% + 2px)`
+    const lastStop = `calc(${end}% - 2px)`
+    return `linear-gradient(to ${w < h ? 'right' : 'bottom'}, #000 ${firstStop}, #${bg} ${firstStop}, #${bg} ${lastStop}, #000 ${lastStop})`
+}
+
+// Crop 1% per original edge in CSS: zoom the contained image by 1 / 0.98,
+// then mask everything outside its unzoomed fitted rectangle. Do not zoom the
+// square tile itself: that would crop the wrong amount on portrait/landscape edges.
+function galleryOriginalSize(width, height) {
+    if (!(width > 0 && height > 0)) return 'contain'
+    return `calc(${100 * Math.min(1, width / height)}% / 0.98) calc(${100 * Math.min(1, height / width)}% / 0.98)`
+}
+
+function galleryOriginalPaddingClip(width, height) {
+    if (!(width > 0 && height > 0) || width === height) return ''
+    const w = 100 * Math.min(1, width / height)
+    const h = 100 * Math.min(1, height / width)
+    const left = (100 - w) / 2, top = (100 - h) / 2
+    const right = left + w, bottom = top + h
+    return `polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, ${left}% ${top}%, ${left}% ${bottom}%, ${right}% ${bottom}%, ${right}% ${top}%, ${left}% ${top}%)`
+}
+
+function thumbnailBackground(src, position, size, gradient) {
+    return {
+        image: [src ? `url('${src}')` : '', gradient].filter(Boolean).join(', '),
+        position: gradient ? (src ? `${position}, center` : 'center') : position,
+        size: gradient ? (src ? `${size || 'auto'}, 100% 100%` : '100% 100%') : size,
+    }
+}
+
 // CSSOM normalizes URLs, colors and positions. Cache our desired paint rather
 // than comparing serialized styles, which could reassign a loading URL on scroll.
-function paintGalleryThumbnail(thumbnail, src, position, size, bg) {
-    const paint = JSON.stringify([src, position, size, bg])
+function paintGalleryThumbnail(thumbnail, src, position, size, bg, gradient = '', spritePaddingClip = '') {
+    const paint = JSON.stringify([src, position, size, bg, gradient, spritePaddingClip])
     if (thumbnail.galleryPaint === paint) return
-    if (thumbnail.galleryImageSrc !== src) {
-        thumbnail.style.backgroundImage = `url('${src}')`
-        thumbnail.galleryImageSrc = src
+    const background = thumbnailBackground(src, position, size, gradient)
+    if (thumbnail.galleryBackgroundImage !== background.image) {
+        thumbnail.style.backgroundImage = background.image
+        thumbnail.galleryBackgroundImage = background.image
     }
-    thumbnail.style.backgroundPosition = position
-    thumbnail.style.backgroundSize = size
+    thumbnail.galleryImageSrc = src
+    thumbnail.style.backgroundPosition = background.position
+    thumbnail.style.backgroundSize = background.size
     thumbnail.style.backgroundColor = `#${bg}`
+    thumbnail.setAttribute('data-sprite-padding', spritePaddingClip ? 'true' : 'false')
+    if (spritePaddingClip) {
+        thumbnail.style.setProperty('--sprite-padding-clip', spritePaddingClip)
+        thumbnail.style.setProperty('--sprite-padding-background', gradient || `#${bg}`)
+    }
     thumbnail.galleryPaint = paint
 }
 
 function showOriginal(item) {
+    if (DEBUG_ENABLED) return
     if (galleryScrolling && GALLERY_IMAGES.get(item.src)?.status !== 'loaded') return
     galleryImage(item.src)
     // Only mutate currently rendered links; async loads may outlive a filter or scroll.
     for (const thumbnail of document.getElementById('gallery').querySelectorAll('.thumbnail')) {
         if (thumbnail.getAttribute('href') !== item.src) continue
-        paintGalleryThumbnail(thumbnail, item.src, 'center', 'contain', item.bg)
+        paintGalleryThumbnail(thumbnail, item.src, 'center', item.originalSize, item.bg, item.gradient, item.originalPaddingClip)
     }
 }
 
 function loadOriginals() {
-    if (galleryScrolling) return
+    if (DEBUG_ENABLED || galleryScrolling) return
     while (activeOriginalLoads < ORIGINAL_LOAD_LIMIT) {
         const item = upgradeCandidates.find(item =>
             !GALLERY_IMAGES.has(item.src) && GALLERY_IMAGES.get(item.thumbSrc)?.painted)
@@ -663,6 +711,12 @@ function loadOriginals() {
 
 function enhanceThumbnails(items, filtered) {
     if (galleryScrolling) return
+    if (DEBUG_ENABLED) {
+        // Keep sprite backgrounds inspectable even with filters or failed WebP.
+        upgradeCandidates = []
+        for (const src of new Set(items.map(item => item.thumbSrc))) galleryImage(src)
+        return
+    }
     // Track direct CSS loads too, so cached originals remain visible during scroll.
     for (const item of items) {
         if (usesOriginal(item, filtered)) galleryImage(item.src)
@@ -998,18 +1052,16 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
         const thumbnail = card.querySelector('.thumbnail')
         const displayImage = !galleryScrolling || thumbnail?.galleryImageSrc === imageSrc ||
             GALLERY_IMAGES.get(imageSrc)?.status === 'loaded'
-        const thumbStyles = !displayImage ? [] : original ? [
-            `background-image: url('${item.src}');`,
-            `background-position: center;`,
-            `background-size: contain;`,
-        ] : [
-            `background-image: url('${item.thumbSrc}');`,
-            `background-position: -${item.bgOffsetX * spriteScale}px -${item.bgOffsetY * spriteScale}px;`,
-            // Scale the existing sheet, including its tile padding. Auto height
-            // also handles partially filled sheets without changing generation.
-            ...(spriteScale === 1 ? [] : [`background-size: ${THUMBNAIL_SHEET_WIDTH * spriteScale}px auto;`]),
+        const position = original ? 'center' : `-${item.bgOffsetX * spriteScale}px -${item.bgOffsetY * spriteScale}px`
+        // Scale only the sheet layer, including padding and partial final sheets.
+        const size = original ? item.originalSize : spriteScale === 1 ? '' : `${THUMBNAIL_SHEET_WIDTH * spriteScale}px auto`
+        const background = thumbnailBackground(displayImage ? imageSrc : null, position, size, item.gradient)
+        const thumbStyles = [
+            ...(background.image ? [`background-image: ${background.image};`] : []),
+            ...(displayImage || item.gradient ? [`background-position: ${background.position};`] : []),
+            ...(background.size && (displayImage || item.gradient) ? [`background-size: ${background.size};`] : []),
+            `background-color: #${item.bg};`,
         ]
-        thumbStyles.push(`background-color: #${item.bg};`)
         const thumbAttrs = [
             `href="${item.src}"`,
             `class="thumbnail"`,
@@ -1049,10 +1101,9 @@ function renderGalleryItems(ds, layout, filtered, renderState) {
                 card.querySelector('.thumbnail-metadata').innerHTML = renderedMetadataHTML
             }
         }
-        if (displayImage) {
-            paintGalleryThumbnail(thumbnail || card.querySelector('.thumbnail'), imageSrc,
-                original ? 'center' : `-${item.bgOffsetX * spriteScale}px -${item.bgOffsetY * spriteScale}px`,
-                original ? 'contain' : spriteScale === 1 ? '' : `${THUMBNAIL_SHEET_WIDTH * spriteScale}px auto`, item.bg)
+        if (displayImage || (item.gradient && !thumbnail?.galleryImageSrc)) {
+            paintGalleryThumbnail(thumbnail || card.querySelector('.thumbnail'), displayImage ? imageSrc : null,
+                position, size, item.bg, item.gradient, displayImage && original ? item.originalPaddingClip : '')
         }
         card.galleryMetadataHTML = metadataHTML
     }

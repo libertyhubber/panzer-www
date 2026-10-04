@@ -13,20 +13,16 @@ import pathlib as pl
 import collections
 import datetime as dt
 from urllib.parse import quote
-from PIL import Image
+from PIL import Image, ImageOps
 
 if __package__:
     from . import classify_images as classifier
     from .export_classifications import export_index
-    from .generate_thumbnails import ROOT_DIR, background_color, update_thumbnails
+    from .generate_thumbnails import ROOT_DIR, background_fields, update_thumbnails
 else:
     import classify_images as classifier
     from export_classifications import export_index
-    from generate_thumbnails import ROOT_DIR, background_color, update_thumbnails
-
-def needs_background(width: int, height: int) -> bool:
-    """Omit bg below 5% dimension difference; integer arithmetic keeps the boundary exact."""
-    return abs(width - height) * 20 >= max(width, height)
+    from generate_thumbnails import ROOT_DIR, background_fields, update_thumbnails
 
 
 def update_indexes(archive_repo_dir: pl.Path, *, refresh_backgrounds: bool = False) -> None:
@@ -79,16 +75,14 @@ def update_indexes(archive_repo_dir: pl.Path, *, refresh_backgrounds: bool = Fal
 
         for img_path in img_paths:
             old_entry = old_entries.get(img_path.name)
-            if old_entry is not None and (
-                not needs_background(old_entry['w'], old_entry['h'])
-                or ('bg' in old_entry and not refresh_backgrounds)
-            ):
+            if old_entry is not None and not refresh_backgrounds and 'bg' in old_entry:
                 img_width, img_height = old_entry['w'], old_entry['h']
-                bg = old_entry.get('bg')
+                colors = {'bg': old_entry['bg']}
             else:
-                with Image.open(img_path) as img:
+                with Image.open(img_path) as original:
+                    img = ImageOps.exif_transpose(original)
                     img_width, img_height = img.size
-                    bg = background_color(img) if needs_background(img_width, img_height) else None
+                    colors = background_fields(img)
 
             # Sprite coordinates are derived from the final local index order.
             entry = {
@@ -96,8 +90,7 @@ def update_indexes(archive_repo_dir: pl.Path, *, refresh_backgrounds: bool = Fal
                 'h': img_height,
                 'name': img_path.name,
             }
-            if needs_background(img_width, img_height):
-                entry['bg'] = bg
+            entry.update(colors)
             new_entry_index.append(entry)
 
         new_entry_index.sort(key=lambda e: e['name'])

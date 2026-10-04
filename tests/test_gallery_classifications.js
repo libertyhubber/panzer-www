@@ -113,6 +113,10 @@ function gallery(extraArchive = false, tagGroups = [], customEntries = null, hos
                     const styleWrites = []
                     const style = new Proxy(parseStyle(attrs.style), {
                         get(target, name) {
+                            if (name === 'setProperty') return (property, value) => {
+                                styleWrites.push(property)
+                                target[property] = value
+                            }
                             const value = target[name]
                             return options.normalizeCSS && name === 'backgroundImage' && value
                                 ? value.replace(/url\('([^']*)'\)/g, 'url("$1")') : value
@@ -517,6 +521,60 @@ test('debug is opt-in with debug=1 on any host', async () => {
         }
     }
 })
+
+test('debug gallery retains sprites through filters, scrolling and resizing without original upgrades', async () => {
+    const entries = manyEntries(100).map(entry => ({ ...entry, bg: 'ABC', g: 'FFF000' }))
+    const ui = gallery(false, [], entries, 'localhost', { query: '?debug=1' })
+    await flush()
+    assert.ok(renderedSprites(ui).size > 0)
+    assert.equal(originalRequests(ui).length, 0)
+    ui.resolveClassifications(Object.fromEntries(entries.map(entry => [
+        `2024/01/${entry.name}`, { tags: ['matching'], template: null },
+    ])))
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'matching' })
+    assert.ok(renderedSprites(ui).size > 0)
+    assert.equal(originalRequests(ui).length, 0)
+    for (const tile of ui.node.querySelectorAll('.thumbnail')) {
+        assert.equal(tile.getAttribute('data-sprite-padding'), 'false')
+        assert.match(tile.style.backgroundImage, /thumbnails-\d+\.webp/)
+        assert.match(tile.style.backgroundImage, /linear-gradient/)
+    }
+    const clock = scrollClock(ui)
+    clock.scroll(20)
+    await flush()
+    await clock.settle()
+    assert.ok(renderedSprites(ui).size > 0)
+    assert.equal(originalRequests(ui).length, 0)
+    ui.node.clientWidth = 375
+    await updateViewport(ui, 'resize')
+    assert.ok(renderedSprites(ui).size > 0)
+    assert.equal(originalRequests(ui).length, 0)
+    await applyFilters(ui, { 'filter-search': '' })
+    assert.ok(renderedSprites(ui).size > 0)
+    assert.equal(originalRequests(ui).length, 0)
+    assert.match(openGalleryItem(ui, 0).src, /^https:\/\/archive.example\//, 'lightbox still opens originals')
+})
+
+for (const failure of ['unsupported WebP', 'failed sprites']) {
+    test(`debug gallery does not fall back to originals for ${failure}`, async () => {
+        const ui = gallery(false, [], null, 'localhost', {
+            query: '?debug=1',
+            ...(failure === 'unsupported WebP' ? { webpSupported: false } : {
+                imageLoad(image, src) { if (src.startsWith('images/')) image.onerror() },
+            }),
+        })
+        await flush()
+        assert.ok(renderedSprites(ui).size > 0)
+        assert.ok(spriteRequests(ui).length > 0)
+        assert.equal(originalRequests(ui).length, 0)
+        ui.resolveClassifications({ [imageId]: result })
+        await flush()
+        await applyFilters(ui, { 'filter-search': 'OCR' })
+        assert.ok(renderedSprites(ui).size > 0)
+        assert.equal(originalRequests(ui).length, 0)
+    })
+}
 
 test('debug modal preserves all metadata safely and follows filtered indexes', async () => {
     const ui = gallery(false, [], null, 'localhost', { query: '?debug=1' })
@@ -1908,7 +1966,7 @@ test('metadata enrichment and resizing retain the thumbnail of a loading image',
     assert.equal(card.querySelector('.thumbnail'), thumbnail)
     assert.equal(thumbnail.style.backgroundImage, background)
     assert.equal(thumbnail.styleWrites.filter(name => name === 'backgroundImage').length, writes)
-    assert.equal(thumbnail.style.backgroundSize, 'contain')
+    assert.equal(thumbnail.style.backgroundSize, 'calc(100% / 0.98) calc(80% / 0.98)')
 })
 
 test('overlapping cards preserve fitted tags and counters throughout scroll and idle', async () => {
@@ -1998,7 +2056,7 @@ test('continuous scroll displays colors and dates without new images until idle'
         assert.equal(renderedSprites(ui).size, 0)
         for (const tile of ui.node.querySelectorAll('.thumbnail')) {
             assert.equal(tile.style.backgroundColor, '#ABC')
-            assert.equal(tile.style.backgroundImage, undefined)
+            assert.equal(tile.style.backgroundImage, 'linear-gradient(to bottom, #000 calc(25% + 2px), #ABC calc(25% + 2px), #ABC calc(75% - 2px), #000 calc(75% - 2px))')
         }
         assert.equal(ui.imageRequests.length, initialRequests)
         assert.equal(clock.pending, 1, 'continuous scroll resets the single idle timer')
@@ -2077,7 +2135,8 @@ test('filtered scroll defers direct originals, including metadata-triggered rend
     await flush()
     assert.match(ui.node.innerHTML, /-data-gallery-idx="38"/)
     assert.match(ui.node.innerHTML, /<time datetime="2024-01-/)
-    assert.doesNotMatch(ui.node.innerHTML, /background-image:/)
+    assert.doesNotMatch(ui.node.innerHTML, /background-image: url\(/)
+    assert.match(ui.node.innerHTML, /background-image: linear-gradient\(to bottom, #000 /)
     assert.match(ui.node.innerHTML, /background-color: #DEF;/)
     assert.equal(ui.imageRequests.length, initialRequests)
     await clock.settle()
@@ -2112,7 +2171,8 @@ test('uncached months show immediate shells, then dates/colors without images du
     assert.match(ui.node.innerHTML, /-data-gallery-idx="418"/)
     assert.match(ui.node.innerHTML, /<time datetime="2024-01-/)
     assert.match(ui.node.innerHTML, /background-color: #FED;/)
-    assert.doesNotMatch(ui.node.innerHTML, /background-image:/)
+    assert.doesNotMatch(ui.node.innerHTML, /background-image: url\(/)
+    assert.match(ui.node.innerHTML, /background-image: linear-gradient\(to bottom, #000 /)
     assert.equal(ui.imageRequests.length, initialRequests)
     await clock.settle()
     assert.ok(renderedSprites(ui).size > 0)
@@ -2250,7 +2310,7 @@ for (const [control, value] of [
         assert.equal(thumbnailCount(ui), 1)
         assert.equal(renderedSprites(ui).size, 0)
         assert.match(ui.node.innerHTML, /background-image: url\('https:\/\/archive.example\/images\/2024\/01\/2024-01-02_b.jpg'\);/)
-        assert.match(ui.node.innerHTML, /background-position: center; background-size: contain; background-color: #000;/)
+        assert.match(ui.node.innerHTML, /background-position: center; background-size: calc\(100% \/ 0\.98\) calc\(80% \/ 0\.98\); background-color: #000;/)
         const item = openGalleryItem(ui, 0)
         assert.equal(item.src, 'https://archive.example/images/2024/01/2024-01-02_b.jpg')
         await applyFilters(ui, { [control]: control === 'filter-reactions' ? '0' : '' })
@@ -2265,7 +2325,7 @@ test('unsupported WebP renders archive originals without requesting sprite sheet
     const ui = gallery(false, [], manyEntries(200), 'localhost', { webpSupported: false })
     await flush()
     assert.equal(renderedSprites(ui).size, 0)
-    assert.match(ui.node.innerHTML, /background-size: contain; background-color: #000;/)
+    assert.match(ui.node.innerHTML, /background-size: calc\(100% \/ 0\.98\) calc\(50% \/ 0\.98\); background-color: #000;/)
     assert.equal(thumbnailCount(ui), 10)
     assert.equal(spriteRequests(ui).length, 0)
     originalRequests(ui)[0].onload()
@@ -2308,9 +2368,216 @@ test('original upgrades wait for sprite load and paint, then wait for original d
     const tile = ui.node.querySelectorAll('.thumbnail').find(node => node.getAttribute('href') === original.src)
     assert.equal(tile.style.backgroundImage, `url('${original.src}')`)
     assert.equal(tile.style.backgroundPosition, 'center')
-    assert.equal(tile.style.backgroundSize, 'contain')
+    assert.equal(tile.style.backgroundSize, 'calc(100% / 0.98) calc(80% / 0.98)')
     assert.equal(tile.style.backgroundColor, '#000')
     assert.equal(renderedSprites(ui).size, 1, 'other tile still shows its preview')
+    ui.resolveClassifications({})
+    await flush()
+})
+
+test('CSS original crop keeps the fitted aspect ratio and crops each original axis by 1%', () => {
+    const context = {}
+    vm.runInNewContext(appSource.slice(appSource.indexOf('function galleryOriginalSize('),
+        appSource.indexOf('function thumbnailBackground(')), context)
+    const size = context.galleryOriginalSize
+    const clip = context.galleryOriginalPaddingClip
+    assert.equal(size(500, 500), 'calc(100% / 0.98) calc(100% / 0.98)')
+    assert.equal(size(500, 1000), 'calc(50% / 0.98) calc(100% / 0.98)')
+    assert.equal(size(1000, 500), 'calc(100% / 0.98) calc(50% / 0.98)')
+    assert.equal(size(1, 100), 'calc(1% / 0.98) calc(100% / 0.98)')
+    assert.equal(size(96, 100), 'calc(96% / 0.98) calc(100% / 0.98)')
+    assert.equal(size(0, 100), 'contain')
+    assert.equal(clip(500, 500), '')
+    assert.equal(clip(0, 100), '')
+    assert.equal(clip(500, 1000), 'polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, 25% 0%, 25% 100%, 75% 100%, 75% 0%, 25% 0%)')
+    assert.equal(clip(1000, 500), 'polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, 0% 25%, 0% 75%, 100% 75%, 100% 25%, 0% 25%)')
+    const css = readFileSync(`${__dirname}/../assets/style.css`, 'utf8')
+    assert.match(css, /\.thumbnail\s*\{[^}]*overflow: hidden;/)
+})
+
+test('gallery-only CSS crop leaves lightbox sources and dimensions unchanged', async () => {
+    const entries = [
+        { name: '2024-01-01_square.jpg', w: 500, h: 500, bg: 'ABC' },
+        { name: '2024-01-02_portrait.jpg', w: 500, h: 1000, bg: 'DEF', g: 'FFF000' },
+    ]
+    const ui = gallery(false, [], entries, 'localhost', { webpSupported: false })
+    await flush()
+    const tiles = ui.node.querySelectorAll('.thumbnail')
+    assert.equal(tiles[0].style.backgroundSize, 'calc(50% / 0.98) calc(100% / 0.98), 100% 100%')
+    assert.equal(tiles[0].getAttribute('data-sprite-padding'), 'true')
+    assert.equal(tiles[1].style.backgroundSize, 'calc(100% / 0.98) calc(100% / 0.98), 100% 100%')
+    assert.match(tiles[1].style.backgroundImage, /linear-gradient\(to bottom, #000 /)
+    assert.equal(tiles[1].getAttribute('data-sprite-padding'), 'false')
+    for (const [index, expected] of [[0, entries[1]], [1, entries[0]]]) {
+        const item = openGalleryItem(ui, index)
+        assert.equal(item.src, `https://archive.example/images/2024/01/${expected.name}`)
+        assert.equal(item.width, expected.w)
+        assert.equal(item.height, expected.h)
+    }
+    ui.resolveClassifications({})
+    await flush()
+})
+
+test('transparent sprites expose CSS colors and gradients without padding overlays', async () => {
+    const entries = [
+        { name: '2024-01-01_a.jpg', w: 100, h: 200, bg: 'ABC', g: 'FFF000' },
+        { name: '2024-01-02_b.jpg', w: 200, h: 100, bg: 'DEF', g: '123456' },
+        { name: '2024-01-03_c.jpg', w: 96, h: 100, bg: 'FED' },
+    ]
+    const ui = gallery(false, [], entries, 'localhost', { imageLoad() {}, clientWidth: 375 })
+    await flush()
+    const tiles = ui.node.querySelectorAll('.thumbnail')
+    assert.equal(tiles.length, 3)
+    for (const tile of tiles) {
+        assert.equal(tile.getAttribute('data-sprite-padding'), 'false')
+        assert.equal(tile.style['--sprite-padding-clip'], undefined)
+        assert.equal(tile.style['--sprite-padding-background'], undefined)
+    }
+    assert.equal(tiles[0].style.backgroundColor, '#FED')
+    assert.match(tiles[1].style.backgroundImage, /linear-gradient\(to bottom, #000 /)
+    assert.match(tiles[2].style.backgroundImage, /linear-gradient\(to right, #000 /)
+    const image = tiles[1].style.backgroundImage
+    const writes = tiles[1].styleWrites.filter(name => name === 'backgroundImage').length
+    ui.node.clientWidth = 684
+    await updateViewport(ui, 'resize')
+    assert.equal(ui.node.querySelectorAll('.thumbnail')[1], tiles[1])
+    assert.equal(tiles[1].getAttribute('data-sprite-padding'), 'false')
+    assert.equal(tiles[1].style.backgroundImage, image)
+    assert.equal(tiles[1].styleWrites.filter(name => name === 'backgroundImage').length, writes)
+    ui.resolveClassifications({})
+    await flush()
+    const css = readFileSync(`${__dirname}/../assets/style.css`, 'utf8')
+    assert.match(css, /\.thumbnail\[data-sprite-padding="true"\]::after\s*\{[^}]*clip-path: var\(--sprite-padding-clip\);/)
+    assert.match(css, /background: var\(--sprite-padding-background\);/)
+})
+
+test('gradient orientation and boundary stops derive from image dimensions', async () => {
+    const context = {}
+    vm.runInNewContext(appSource.slice(appSource.indexOf('function galleryGradient('),
+        appSource.indexOf('function thumbnailBackground(')), context)
+    const gradient = (w, h) => context.galleryGradient({ w, h, bg: 'ABC' })
+    assert.equal(gradient(100, 200), 'linear-gradient(to right, #000 calc(25% + 2px), #ABC calc(25% + 2px), #ABC calc(75% - 2px), #000 calc(75% - 2px))')
+    assert.equal(gradient(200, 100), 'linear-gradient(to bottom, #000 calc(25% + 2px), #ABC calc(25% + 2px), #ABC calc(75% - 2px), #000 calc(75% - 2px))')
+    assert.equal(gradient(0, 100), '')
+    // No tolerance cutoff remains: both orientations always use black padding.
+    assert.match(gradient(95, 100), /^linear-gradient\(to right, #000 /)
+    assert.match(gradient(100, 95), /^linear-gradient\(to bottom, #000 /)
+})
+
+test('all aspect ratios use black outer stops regardless of obsolete edge metadata', () => {
+    const context = {}
+    vm.runInNewContext(appSource.slice(appSource.indexOf('function galleryGradient('),
+        appSource.indexOf('function thumbnailBackground(')), context)
+    for (const [w, h] of [[100, 100], [96, 100], [100, 96], [951, 1000], [1000, 951],
+        [100, 200], [200, 100], [95, 100], [100, 95], [1, 10000], [10000, 1]]) {
+        const start = 50 * (1 - Math.min(w, h) / Math.max(w, h))
+        const expected = `linear-gradient(to ${w < h ? 'right' : 'bottom'}, #000 calc(${start}% + 2px), #ABC calc(${start}% + 2px), #ABC calc(${100 - start}% - 2px), #000 calc(${100 - start}% - 2px))`
+        for (const g of [undefined, null, 'FFF123', 'invalid', 123]) {
+            assert.equal(context.galleryGradient({ w, h, bg: 'ABC', g }), expected)
+        }
+    }
+    for (const bg of [undefined, null, '#ABC', 'invalid']) {
+        assert.equal(context.galleryGradient({ w: 96, h: 100, bg, g: 'FFF123' }), '')
+    }
+})
+
+test('gradients remain beneath sprites and originals through upgrades, filters and resizing', async () => {
+    const entries = [
+        { name: '2024-01-01_a.jpg', w: 100, h: 200, bg: 'ABC', g: 'FFF000' },
+        { name: '2024-01-02_b.jpg', w: 200, h: 100, bg: 'DEF', g: '123456' },
+    ]
+    const ui = gallery(false, [], entries, 'localhost', { normalizeCSS: true, clientWidth: 375 })
+    await flush()
+    let tiles = ui.node.querySelectorAll('.thumbnail')
+    assert.match(tiles[0].style.backgroundImage, /\.webp.*linear-gradient\(to bottom, #000 calc\(25% \+ 2px\), #DEF calc\(25% \+ 2px\), #DEF calc\(75% - 2px\), #000 calc\(75% - 2px\)\)/)
+    assert.match(tiles[1].style.backgroundImage, /linear-gradient\(to right, #000 calc\(25% \+ 2px\), #ABC calc\(25% \+ 2px\), #ABC calc\(75% - 2px\), #000 calc\(75% - 2px\)\)/)
+    assert.match(tiles[0].style.backgroundSize, /px auto, 100% 100%$/)
+    assert.match(tiles[0].style.backgroundPosition, /, center$/)
+    assert.equal(tiles[0].getAttribute('data-sprite-padding'), 'false')
+    for (const image of originalRequests(ui)) image.onload()
+    await flush()
+    assert.equal(renderedSprites(ui).size, 0)
+    assert.match(tiles[1].style.backgroundImage, /linear-gradient\(to right, #000 .*#ABC .*#ABC .*#000 /)
+    assert.match(tiles[1].style['--sprite-padding-background'], /^linear-gradient\(to right, #000 /)
+    const tile = tiles[0]
+    const writes = tile.styleWrites.filter(name => name === 'backgroundImage').length
+    assert.match(tile.style.backgroundImage, /url\("https:.*\), linear-gradient\(to bottom,/)
+    assert.equal(tile.style.backgroundSize, 'calc(100% / 0.98) calc(50% / 0.98), 100% 100%')
+    assert.equal(tile.style.backgroundPosition, 'center, center')
+    assert.equal(tile.getAttribute('data-sprite-padding'), 'true', 'originals must mask the zoomed edges')
+    assert.equal(tile.style['--sprite-padding-clip'], 'polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, 0% 25%, 0% 75%, 100% 75%, 100% 25%, 0% 25%)')
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    ui.node.clientWidth = 456
+    await updateViewport(ui, 'resize')
+    assert.equal(tile.styleWrites.filter(name => name === 'backgroundImage').length, writes,
+        'CSS normalization and resize must not reassign image URLs')
+    await applyFilters(ui, { 'filter-search': 'Sesamstraße' })
+    tiles = ui.node.querySelectorAll('.thumbnail')
+    assert.equal(tiles.length, 1)
+    assert.match(tiles[0].style.backgroundImage, /linear-gradient\(to bottom,/)
+    assert.equal(tiles[0].style.backgroundSize, 'calc(100% / 0.98) calc(50% / 0.98), 100% 100%')
+    await applyFilters(ui, { 'filter-search': '' })
+    assert.match(ui.node.querySelectorAll('.thumbnail')[0].style.backgroundImage, /linear-gradient\(to bottom,/)
+})
+
+test('gradient layer stays full-size when sprite scale changes', async () => {
+    const entries = manyEntries(30).map(entry => ({ ...entry, w: 100, h: 200, bg: 'ABC', g: 'FFF000' }))
+    const ui = gallery(false, [], entries, 'localhost', { clientWidth: 375, imageLoad() {} })
+    await flush()
+    const tile = ui.node.querySelectorAll('.thumbnail')[0]
+    const image = tile.style.backgroundImage
+    const writes = tile.styleWrites.filter(name => name === 'backgroundImage').length
+    assert.match(tile.style.backgroundSize, /px auto, 100% 100%$/)
+    ui.node.clientWidth = 456
+    await updateViewport(ui, 'resize')
+    assert.equal(ui.node.querySelectorAll('.thumbnail')[0], tile)
+    assert.equal(tile.style.backgroundSize, 'auto, 100% 100%')
+    assert.equal(tile.style.backgroundImage, image)
+    assert.equal(tile.styleWrites.filter(name => name === 'backgroundImage').length, writes)
+    ui.resolveClassifications({})
+    await flush()
+})
+
+test('deferred scroll thumbnails paint gradients without requesting images', async () => {
+    const entries = manyEntries(200).map(entry => ({ ...entry, w: 100, h: 200, bg: 'ABC', g: 'FFF000' }))
+    const ui = gallery(false, [], entries)
+    ui.resolveClassifications({})
+    await flush()
+    const clock = scrollClock(ui)
+    const requests = ui.imageRequests.length
+    clock.scroll(20)
+    await flush()
+    for (const tile of ui.node.querySelectorAll('.thumbnail')) {
+        assert.equal(tile.style.backgroundImage, 'linear-gradient(to right, #000 calc(25% + 2px), #ABC calc(25% + 2px), #ABC calc(75% - 2px), #000 calc(75% - 2px))')
+        assert.equal(tile.style.backgroundSize, '100% 100%')
+        assert.equal(tile.style.backgroundPosition, 'center')
+        assert.equal(tile.style.backgroundColor, '#ABC')
+    }
+    assert.equal(ui.imageRequests.length, requests)
+    await clock.settle()
+    assert.ok(renderedSprites(ui).size > 0)
+    for (const tile of ui.node.querySelectorAll('.thumbnail')) {
+        assert.match(tile.style.backgroundImage, /\.webp.*linear-gradient/)
+        assert.equal(tile.style.backgroundSize, 'auto, 100% 100%')
+    }
+})
+
+test('legacy edge fields are ignored in rendered landscape gradients', async () => {
+    const entries = [undefined, null, 123, '#FFF000', 'FFF', 'FFFFFF; color: red'].map((g, index) => ({
+        name: `2024-01-01_${index}.jpg`, w: 200, h: 100, bg: 'ABC', g,
+    }))
+    entries.push({ name: '2024-01-02_square.jpg', w: 96, h: 100, bg: 'DEF', g: 'FFF000' })
+    const ui = gallery(false, [], entries, 'localhost', { webpSupported: false })
+    await flush()
+    const tiles = ui.node.querySelectorAll('.thumbnail')
+    assert.match(tiles[0].style.backgroundImage, /linear-gradient\(to right, #000 /)
+    assert.match(tiles[0].style.backgroundImage, /#DEF .*#DEF .*#000 calc\(/)
+    for (const tile of tiles.slice(1)) {
+        assert.match(tile.style.backgroundImage, /linear-gradient\(to bottom, #000 .*#ABC .*#ABC .*#000 /)
+        assert.doesNotMatch(tile.style.backgroundImage, /color: red/)
+    }
+    assert.equal(tiles[0].style.backgroundColor, '#DEF')
     ui.resolveClassifications({})
     await flush()
 })
@@ -2659,21 +2926,21 @@ test('resizing a scrolled mobile gallery recalculates its visible window using t
     assert.equal(cardPositions(ui)[2][0] - cardPositions(ui)[0][0] - 269, 15)
 })
 
-test('compact original upgrades, filtering and failed sprites keep contain sizing instead of sprite scaling', async () => {
+test('compact original upgrades, filtering and failed sprites keep CSS crop sizing instead of sprite scaling', async () => {
     const ui = gallery(false, [], null, 'localhost', { clientWidth: 375 })
     await flush()
     const original = originalRequests(ui)[0]
     original.onload()
     await flush()
     const upgraded = ui.node.querySelectorAll('.thumbnail').find(tile => tile.getAttribute('href') === original.src)
-    assert.equal(upgraded.style.backgroundSize, 'contain')
+    assert.equal(upgraded.style.backgroundSize, 'calc(100% / 0.98) calc(80% / 0.98)')
     assert.equal(upgraded.style.backgroundPosition, 'center')
     assert.equal(ui.node.style['--thumbnail-display-size'], '180px')
     ui.resolveClassifications({ [imageId]: result })
     await flush()
     await applyFilters(ui, { 'filter-search': 'Sesamstraße' })
     assert.equal(thumbnailCount(ui), 1)
-    assert.equal(ui.node.querySelectorAll('.thumbnail')[0].style.backgroundSize, 'contain')
+    assert.equal(ui.node.querySelectorAll('.thumbnail')[0].style.backgroundSize, 'calc(100% / 0.98) calc(80% / 0.98)')
     assert.equal(ui.node.style['--thumbnail-display-size'], '180px')
     assert.equal(ui.node.style['--gallery-card-height'], '250px')
     assert.equal(ui.node.style.height, '265px')
@@ -2684,7 +2951,7 @@ test('compact original upgrades, filtering and failed sprites keep contain sizin
         const fallback = gallery(false, [], null, 'localhost', { clientWidth: 375, ...options })
         await flush()
         assert.equal(fallback.node.style['--thumbnail-display-size'], '180px')
-        assert.ok(fallback.node.querySelectorAll('.thumbnail').every(tile => tile.style.backgroundSize === 'contain'))
+        assert.ok(fallback.node.querySelectorAll('.thumbnail').every(tile => tile.style.backgroundSize === 'calc(100% / 0.98) calc(80% / 0.98)'))
         fallback.resolveClassifications({})
         await flush()
     }

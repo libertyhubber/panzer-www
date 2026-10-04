@@ -40,7 +40,8 @@ const lightbox = new PhotoSwipeLightbox({
 window.lightbox = lightbox;
 
 // const CB = Math.random().toString(36).slice(2); // Cachebust
-window.CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
+// Do not share cache keys with opaque or uncropped previews.
+window.CB = 'crop1-alpha1-' + parseInt(+new Date() / (1000 * 3600)).toString(36)
 
 const CACHE = {}
 
@@ -63,7 +64,7 @@ window.fetchJson = fetchJson;
 
 const appNode = document.createElement("script")
 appNode.setAttribute("type", "text/javascript")
-appNode.setAttribute("src", "/assets/app.js?cb=53")
+appNode.setAttribute("src", "/assets/app.js?cb=58")
 document.body.appendChild(appNode)
 
 appNode.addEventListener("load", function(){

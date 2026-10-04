@@ -141,8 +141,23 @@ body {
 	position: relative;
 	background-color: #888;
 	background-repeat: no-repeat;
+	/* Clip zoomed originals at the tile edges; the padding mask below clips
+	   the shorter axis at the fitted image bounds without touching the fill. */
+	overflow: hidden;
 	width: var(--thumbnail-display-size, 220px);
 	height: var(--thumbnail-display-size, 220px);
+}
+
+/* Only zoomed gallery originals need this fitted-rectangle crop. Transparent
+   sprites show the CSS fill directly and never enable the overlay. The legacy
+   sprite-padding variable names remain for originals; the lightbox is uncropped. */
+.thumbnail[data-sprite-padding="true"]::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: var(--sprite-padding-background);
+	clip-path: var(--sprite-padding-clip);
+	pointer-events: none;
 }
 
 .thumbnail:focus-visible {

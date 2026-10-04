@@ -72,6 +72,10 @@ not stored.
 # This does not download archive originals or change the monthly indexes.
 uv run --script scripts/generate_thumbnails.py --convert-existing
 
+# Locally add transparent padding to existing WebP sheets (no downloads).
+uv run --script scripts/migrate_transparent_sprites.py --dry-run
+uv run --script scripts/migrate_transparent_sprites.py
+
 # Initial generation if no local sheets exist: download archive originals.
 make thumbnails
 
@@ -87,29 +91,73 @@ Sprites and matching monthly indexes live in **`images/YYYY/MM/`** in this websi
 repository, alongside the global metadata in `images/`.
 Each `thumbnails-00.webp`, `thumbnails-01.webp`, etc. contains at most **20 images**
 in a **5-column grid**, with **220 × 220 px** tiles and **2 px** gutters. Images
-are fitted without cropping/upscaling, centered on black, and saved as **lossy WebP
-at quality 55**, with encoder method 6. The final sheet uses only the rows it needs.
+have **1% cropped from each edge** (98% retained in each dimension), then are fitted
+at the original aspect ratio, centered on **transparent padding**, and saved as
+**lossy WebP at quality 55**, with a **lossless alpha channel** and encoder method 6.
+Gutters and unused cells are transparent too. Native source transparency is preserved; Crop insets are rounded to whole source pixels, clamped for tiny
+images. Fitted dimensions use the original aspect ratio and size cap to avoid
+crop-rounding drift. The final sheet uses only the rows it needs.
 The existing JPEG sheets were converted locally; future generated sheets use
 archive originals. WebP has no progressive JPEG-style refinement; progressive
 quality enhancement comes from subsequently loading the original images.
 
+### Local transparency migration
+
+`scripts/migrate_transparent_sprites.py` reads existing monthly indexes to identify
+fitted image rectangles. It clears tile padding, 2px gutters and unused cells,
+including local `-qNN` comparison sheets, without downloading originals or changing
+indexes, colors, crops, dimensions or ordering. It adds a compressed lossless `ALPH`
+channel to each existing lossy WebP container while preserving the original `VP8`
+RGB payload **byte-for-byte**: there is no additional image recompression or quality
+loss. Compression bleed already present inside image bounds cannot be undone.
+Existing source alpha inside the image is retained.
+
+Use `--month YYYY/MM` (repeatable) to select months, `--workers N` for parallelism,
+or `--dry-run` to preview changes. Each sheet is decoded and its alpha verified
+before atomic replacement; repeat runs skip completed sheets. Missing sheets and
+geometry mismatches fail rather than guessing. The migration supports static lossy
+WebP sheets, not opaque lossless/animated files or JPEGs (convert JPEGs first).
+
 Sheet names and offsets are derived from the entry's position in the local
 `entry_index.json`: entries 0–19 use sheet 00, 20–39 use sheet 01, etc. No sheet
 filename or coordinates need to be stored per entry. The index preserves archive
-order and contains image names, original dimensions and an optional `bg` background
-color (three uppercase hexadecimal digits without `#`, e.g. `000` or `FFF`). During
-ingestion, pixels in the outer band (5% of the shorter dimension, at least one pixel)
-are rounded to the nearest three-digit RGB color, then the most common color is
-selected. Each pixel counts once and ties use the first encountered color. Sampling
-a band prevents thin decorative frames from dominating the background selection.
-Square or nearly square images omit `bg` when
-`abs(w - h) / max(w, h) < 0.05`; exactly 5% still receives a color. Ingestion removes
-obsolete `bg` values from near-square entries and reuses their saved dimensions
-without reopening originals. Other archive entries missing `bg` are backfilled on
-the next ingest; saved colors are reused. Sprite padding and original-image tiles
-use this color, falling back to black for indexes without `bg`.
-To refresh cached colors and sprites without any classification/API calls, run from
-this repository (repeat for other archive checkouts as needed):
+order and contains image names, original dimensions and background colors:
+
+```json
+{"name":"example.jpg","w":600,"h":1200,"bg":"ABC"}
+```
+
+`bg` is the average color of the **full-resolution cropped preview**, including for square images,
+encoded as three uppercase hexadecimal digits without `#`. Each RGB channel is
+averaged over every source pixel in the cropped image (no downsampling), then rounded
+to the nearest four-bit value. Averaging uses stored RGB values, without linear-light
+conversion. No edge colors are calculated or stored.
+
+**Every image uses black (`#000`, the gallery background) for both outer gradient
+stops**, regardless of aspect ratio. The center retains `bg`. JS derives the
+orientation and image-boundary stops from the dimensions. Four stops pair black
+with `bg` at the first boundary, then `bg` with black at the last boundary. Both
+pairs are shifted 2 CSS pixels inward to hide pixel-rounding seams. Each pair shares
+its position, producing a solid `bg` center and hard transitions to black padding
+while images are deferred/loading. Loaded gallery originals cover the center with
+the same 1%-per-edge visual crop. Missing or invalid `bg` falls back to black.
+
+Ingestion backfills missing background averages and reuses cached `bg` and dimensions.
+Obsolete `g` fields from legacy indexes are discarded without reopening originals.
+Background-only index changes **do not regenerate sprites**. Transparent sprite
+padding exposes the CSS background/gradient directly, without any padding overlay.
+Fitted image bounds match thumbnail rounding, integer centering and the original
+size cap, and scale with compact tiles.
+Gallery originals are centered at `1 / 0.98` times their contained dimensions using
+CSS background sizing. Tile clipping and an overlay outside the fitted image rectangle
+remove 1% from each original edge without zooming the background/gradient. This applies
+to upgrades, filtered views and fallback originals; the lightbox remains uncropped.
+The legacy `--sprite-padding-clip`/`--sprite-padding-background` properties now apply
+only to this original-image crop, not to sprite previews.
+Previously cached colors require an explicit refresh to use cropped-preview averages;
+normal ingestion still reuses completed entries. To refresh cached colors without any
+classification/API calls, run from this repository (repeat for other archive checkouts
+as needed):
 
 ```bash
 uv run python - <<'PY'
@@ -123,20 +171,35 @@ update_thumbnails(archive)
 PY
 ```
 
+Without an archive checkout, download originals to refresh local index colors:
+
+```bash
+# Rebuild sprites AND colors from cropped originals. Omit --month for all months.
+uv run --script scripts/generate_thumbnails.py --force --refresh-backgrounds --month 2026/09
+# For a colors-only refresh, omit --force; existing sprites stay unchanged.
+```
+
+This stages each month's sprites and colors before publishing its index. Combining
+`--force` and `--refresh-backgrounds` downloads and decodes each original only once.
+Normal thumbnail runs
+preserve completed local background colors for unchanged images, even if the remote
+archive index still contains dominant colors. Use `--refresh-backgrounds` to recalculate
+them explicitly.
+
 The gallery displays 220 px tiles and loads **local sprites/indexes** as quick previews for unfiltered
 browsing. After each visible sheet has loaded, decoded and had a chance to paint,
 archive originals are loaded lazily for that bounded window, with low request
 priority and at most **four concurrent upgrades**. Each original replaces its
-preview only once loaded and decoded, fitted without cropping. Completed upgrades
+preview only once loaded and decoded, fitted with the same visual crop via CSS. Completed upgrades
 survive metadata refreshes and scrolling; queued offscreen upgrades are discarded.
 A failed original leaves its preview intact.
 
 When any filter is active, tiles use archive originals directly instead of sparsely
-used sprite sheets. Browsers that cannot decode lossy WebP also use originals
+used sprite sheets. Browsers that cannot decode lossy WebP with alpha also use originals
 directly. Missing/corrupt sheets fall back to originals. The lightbox always opens
 archive originals. Only viewport rows plus one extra row on each side are rendered
 in either mode. During scroll, the visible card window updates at most once per
-animation frame. Cards show their indexed background color, date and available
+animation frame. Cards show their indexed background color/gradient, date and available
 metadata without starting new image requests; already loaded images remain visible.
 Cards that remain in the rendered window retain their fitted tags and overflow
 counters during scroll and idle image hydration. Tag previews are refitted only
@@ -924,8 +987,9 @@ leaving the metadata area unscaled: 180px thumbnails use 250px cards and 265px r
 The 15px vertical gap remains fixed. Gallery height, row positioning, and viewport
 rendering all use the responsive row height. Existing 220px sprite sheets
 are scaled only in the browser: background widths and tile offsets use the same
-scale, with automatic height for partial sheets. Sprite generation is unchanged;
-originals still use `contain`. Metadata text is never scaled and uses 24px lines,
+scale, with automatic height for partial sheets. Sprite geometry is unchanged;
+originals retain contained aspect-ratio fitting with the 1%-per-edge CSS crop.
+Metadata text is never scaled and uses 24px lines,
 while tags retain 18px lines and transparent backgrounds. Cards have 5px rounded corners and clip
 overflowing content; wrapped metadata can leave less room for the lower tags.
 Tags and meme templates appear below the Telegram metadata in a 39px section,
@@ -941,7 +1005,10 @@ stays within the viewport, scrolling long lists within the space below its top.
 Overlay tags still apply the search/template filters. Close it with Escape, the
 close button, a second counter click or an outside click; page scroll and resize
 also dismiss it. The image metadata debug button is disabled by default; add
-`debug=1` to the query string to enable it on any host. Tag frequencies are counted once after loading,
+`debug=1` to the query string to enable it on any host. Debug mode always uses sprite
+backgrounds in the gallery, including filtered results; automatic original upgrades
+and failed/unsupported sprite fallbacks are disabled so previews remain inspectable.
+The lightbox still opens originals. Tag frequencies are counted once after loading,
 case-insensitively and once per classified image across the entire catalog.
 Thumbnail tags are ordered most-common-first (alphabetically on ties). All tags,
 including those used in only one image, are eligible for display if they belong to

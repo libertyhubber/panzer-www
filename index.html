@@ -7,7 +7,7 @@
 
     <link rel="shortcut icon" type="image/png" sizes="64x64" href="assets/favicon64.png?cb=1">
 
-    <link rel="stylesheet" href="/assets/style.css?cb=44" />
+    <link rel="stylesheet" href="/assets/style.css?cb=45" />
     <link rel="stylesheet" href="/assets/icons.css?cb=24" />
     <link rel="stylesheet" href="/assets/navigation.css?cb=1" />
     <script src="/assets/navigation.js?cb=1" defer></script>
@@ -183,7 +183,8 @@ const lightbox = new PhotoSwipeLightbox({
 window.lightbox = lightbox;
 
 // const CB = Math.random().toString(36).slice(2); // Cachebust
-window.CB = parseInt(+new Date() / (1000 * 3600)).toString(36)
+// Do not share cache keys with opaque or uncropped previews.
+window.CB = 'crop1-alpha1-' + parseInt(+new Date() / (1000 * 3600)).toString(36)
 
 const CACHE = {}
 
@@ -206,7 +207,7 @@ window.fetchJson = fetchJson;
 
 const appNode = document.createElement("script")
 appNode.setAttribute("type", "text/javascript")
-appNode.setAttribute("src", "/assets/app.js?cb=53")
+appNode.setAttribute("src", "/assets/app.js?cb=58")
 document.body.appendChild(appNode)
 
 appNode.addEventListener("load", function(){
