@@ -34,4 +34,4 @@ serve:
 
 .PHONY: watch
 watch:
-	watch --interval 7200 -c 'make sync_and_ingest 2>>sync.log >> sync.log;tail -n 80 sync.log'
+	watch --interval 40000 -c 'make sync_and_ingest 2>>sync.log >> sync.log;tail -n 80 sync.log'
