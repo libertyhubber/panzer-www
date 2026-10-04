@@ -868,7 +868,7 @@ async function updateGallery() {
     if (filtered && !GALLERY_STATE.filteredItems) {
         // Await only the first response; later archive matches arrive progressively.
         document.getElementById('gallery').setAttribute?.('aria-busy', 'true')
-        status.textContent = 'Suche läuft…'
+        status.textContent = 'lade Memes...'
         loadAllItems()
         await requestFilter()
         if (renderVersion !== galleryRenderVersion || version !== GALLERY_STATE.filterVersion) return
@@ -877,13 +877,19 @@ async function updateGallery() {
     galleryNode.setAttribute?.('aria-busy', String(filtered && !GALLERY_STATE.allItemsComplete))
     const totalRows = Math.ceil(totalEntries / tnColumns)
     galleryNode.style.height = (totalRows * rowHeight) + "px"
+    const { search, template, minReactions } = GALLERY_STATE.filters
+    const loading = !GALLERY_STATE.allItemsComplete ||
+        ((search || template) && GALLERY_STATE.classificationStatus === 'loading') ||
+        (search && GALLERY_STATE.classificationTextStatus === 'loading') ||
+        (minReactions > 0 && GALLERY_STATE.telegramStatus === 'loading')
     status.textContent = filtered
-        ? `${totalEntries} passende Bilder` + (GALLERY_STATE.allItemsError
+        ? `${totalEntries} Memes` + (GALLERY_STATE.allItemsError
             ? ' (Archiv unvollständig geladen. Ändere einen Filter, um es erneut zu versuchen.)' : '') +
-            (!GALLERY_STATE.allItemsComplete ? ' (Archiv wird geladen…)' : '') + (GALLERY_STATE.filters.search && GALLERY_STATE.classificationStatus !== 'ready'
-            ? ' (Schlagwortsuche benötigt Klassifizierungsdaten)' : '') + (GALLERY_STATE.filters.search && GALLERY_STATE.classificationTextStatus !== 'ready'
-            ? GALLERY_STATE.classificationTextStatus === 'loading' ? ' (Volltextsuche wird geladen…)' : ' (Volltextsuche nicht verfügbar)' : '') + (GALLERY_STATE.filters.minReactions > 0 && GALLERY_STATE.telegramStatus !== 'ready'
-            ? GALLERY_STATE.telegramStatus === 'loading' ? ' (Reaktionen werden geladen…)' : ' (Reaktionen nicht verfügbar)' : '')
+            (loading ? ' (lade Memes...)' : '') +
+            (search && GALLERY_STATE.classificationTextStatus === 'unavailable'
+                ? ' (Volltextsuche nicht verfügbar)' : '') +
+            (minReactions > 0 && GALLERY_STATE.telegramStatus === 'unavailable'
+                ? ' (Reaktionen nicht verfügbar)' : '')
         : ''
     if (filtered && GALLERY_STATE.workerError) status.textContent = 'Suche nicht verfügbar. Bitte lade die Seite neu.'
     status.textContent += GALLERY_STATE.navigationNotice

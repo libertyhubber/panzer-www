@@ -418,14 +418,14 @@ test('text request starts last and delayed text enables full-text search and too
     assert.equal(ui.requests.at(-1), 'images/2024/01/classification_text_index.json')
     await applyFilters(ui, { 'filter-search': 'Sesamstraße' })
     assert.equal(ui.node.innerHTML, '', 'search waits for all matching fields so later OCR matches cannot shift results')
-    assert.match(ui.controls['filter-status'].textContent, /Volltextsuche wird geladen/)
+    assert.match(ui.controls['filter-status'].textContent, /lade Memes\.\.\./)
     await applyFilters(ui, { 'filter-search': 'OCR' })
     assert.equal(ui.node.innerHTML, '')
     releaseText({ [imageId]: { text: result.text, description: result.description } })
     await flush()
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     assert.match(ui.node.innerHTML, /aria-label="Description with/)
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.match(ui.controls['filter-search'].placeholder, /Bildtexte/)
 })
 
@@ -455,12 +455,31 @@ test('reaction filtering refreshes when delayed Telegram metadata arrives', asyn
     await flush()
     await applyFilters(ui, { 'filter-reactions': '7', 'filter-search': 'OCR' })
     assert.equal(ui.node.innerHTML, '')
-    assert.match(ui.controls['filter-status'].textContent, /Reaktionen werden geladen/)
+    assert.match(ui.controls['filter-status'].textContent, /lade Memes\.\.\./)
     release({ '2024-01-02_b.jpg': [42, 7, 100, 2] })
     await flush()
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     assert.match(ui.node.innerHTML, /♥ 7/)
+})
+
+test('filter status consolidates pending archive and metadata into one loading indicator', async () => {
+    let releaseTelegram, releaseText
+    const telegram = new Promise(resolve => { releaseTelegram = resolve })
+    const textIndex = new Promise(resolve => { releaseText = resolve })
+    const ui = gallery(false, [], null, 'localhost', { telegram, textIndex })
+    await flush()
+    await applyFilters(ui, { 'filter-search': 'OCR', 'filter-reactions': '7' })
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes (lade Memes...)')
+    ui.resolveClassifications({ [imageId]: result })
+    await flush()
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes (lade Memes...)')
+    releaseTelegram({ '2024-01-02_b.jpg': [42, 7, 100, 2] })
+    await flush()
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes (lade Memes...)')
+    releaseText({ [imageId]: { text: result.text, description: result.description } })
+    await flush()
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
 })
 
 test('Telegram metadata failure leaves the gallery usable', async () => {
@@ -1025,7 +1044,7 @@ test('search input waits for 500 ms of inactivity before applying the latest val
     assert.equal(ui.node.innerHTML, '', 'the filter handler runs after exactly 500 ms idle')
     advance(150)
     await flush()
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     assert.doesNotMatch(ui.node.innerHTML, /2024-01-01_a.jpg/)
     assert.equal(timers.size, 0)
@@ -1038,7 +1057,7 @@ test('search input waits for 500 ms of inactivity before applying the latest val
     ui.controls['filter-reactions'].handler()
     advance(150)
     await flush()
-    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes')
     assert.equal(timers.size, 0, 'no redundant search handler remains queued')
 })
 
@@ -1112,7 +1131,7 @@ test('clicking a tag fills the search and filters without focus or opening the l
     assert.equal(ui.controls['filter-search-icon'].hidden, true)
     await new Promise(resolve => setTimeout(resolve, 180))
     await flush()
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.equal(ui.lightbox.openedIndex, undefined)
 })
 
@@ -1139,7 +1158,7 @@ test('clicking a template selects it, even when absent from the dropdown, withou
     assert.equal(ui.controls['filter-search'].value, 'OCR')
     await new Promise(resolve => setTimeout(resolve, 180))
     await flush()
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.equal(ui.lightbox.openedIndex, undefined)
 })
 
@@ -1179,7 +1198,7 @@ test('long template names are shortened in cards and options, but filtering uses
             assert.equal((ui.controls['filter-template'].innerHTML.match(/<option /g) || []).length, 2)
             await new Promise(resolve => setTimeout(resolve, 180))
             await flush()
-            assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+            assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
             assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
             assert.equal(ui.lightbox.openedIndex, undefined)
         }
@@ -1230,7 +1249,7 @@ test('tags use catalog-wide image counts for sorting without hiding singletons',
     assert.deepEqual(visible.tags, ['Singleton', 'Rare', 'Common', 'Alphabetical', 'Duplicate only', 'duplicate ONLY'])
     // Filtering must not change frequencies or remove singleton tags from search.
     await applyFilters(ui, { 'filter-search': 'singleton' })
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.deepEqual(tagLabels(), expected)
 })
 
@@ -1250,10 +1269,10 @@ test('template labels hide catalog singletons without removing images or search 
 
     // Frequencies remain catalog-wide, even when only one matching image is shown.
     await applyFilters(ui, { 'filter-search': 'Shared template' })
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.match(ui.node.innerHTML, /class="classification-tag meme-template">Shared template/)
     await applyFilters(ui, { 'filter-search': 'Singleton template' })
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     assert.doesNotMatch(ui.node.innerHTML, /meme-template/)
 })
@@ -1296,7 +1315,7 @@ test('combines minimum reactions, template and case-insensitive literal text sea
     await applyFilters(ui, {
         'filter-reactions': '7', 'filter-template': result.template, 'filter-search': 'oCr',
     })
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     assert.doesNotMatch(ui.node.innerHTML, /2024-01-01_a.jpg/)
     ui.listeners.click[0]({
@@ -1307,7 +1326,7 @@ test('combines minimum reactions, template and case-insensitive literal text sea
     await applyFilters(ui, { 'filter-reactions': '8' })
     assert.equal(ui.node.innerHTML, '')
     assert.equal(ui.node.style.height, '0px')
-    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes')
     await applyFilters(ui, { 'filter-reactions': '0', 'filter-template': '', 'filter-search': '' })
     assert.match(ui.node.innerHTML, /2024-01-01_a.jpg/)
     assert.equal(ui.node.style.height, '305px')
@@ -1360,14 +1379,14 @@ for (const failFirst of [false, true]) {
         assert.equal(requested.at(-1), pathFor('01'))
         for (const month of ['06', '05', '04', '03', '01']) settle(month)
         await flush()
-        assert.match(ui.controls['filter-status'].textContent, failFirst ? /unvollständig/ : /Archiv wird geladen/)
+        assert.match(ui.controls['filter-status'].textContent, failFirst ? /unvollständig/ : /lade Memes\.\.\./)
         settle('07')
         await flush()
         assert.equal(requested.length, 8)
         assert.equal(new Set(requested).size, 8, 'each uncached month is scheduled once')
         assert.equal(ui.controls['filter-status'].textContent, failFirst
-            ? '18 passende Bilder (Archiv unvollständig geladen. Ändere einen Filter, um es erneut zu versuchen.)'
-            : '20 passende Bilder')
+            ? '18 Memes (Archiv unvollständig geladen. Ändere einen Filter, um es erneut zu versuchen.)'
+            : '20 Memes')
         openGalleryItem(ui, 0)
         assert.deepEqual(Array.from(ui.lightbox.options.dataSource, item => item.imageId),
             [...dirs].reverse().filter(dir => !failFirst || dir !== '2024/08')
@@ -1387,18 +1406,18 @@ test('search buffers older completed months and appends matches without moving e
     await flush()
     await applyFilters(ui, { 'filter-search': 'OCR' })
     assert.equal(ui.node.innerHTML, '', 'older matches stay buffered while newest text is pending')
-    assert.match(ui.controls['filter-status'].textContent, /0 passende Bilder.*Archiv wird geladen/)
+    assert.match(ui.controls['filter-status'].textContent, /0 Memes.*lade Memes\.\.\./)
     assert.equal(ui.node.attributes['aria-busy'], 'true')
     held.get(paths[0])(await fetchJson(paths[0]))
     await flush()
     assert.match(ui.node.innerHTML, /2024-03-02_b.jpg/)
     assert.doesNotMatch(ui.node.innerHTML, /2024-0[12]-02_b.jpg/)
     const positions = cardPositions(ui)
-    assert.match(ui.controls['filter-status'].textContent, /1 passende Bilder.*Archiv wird geladen/)
+    assert.match(ui.controls['filter-status'].textContent, /1 Memes.*lade Memes\.\.\./)
     held.get(paths[1])(await fetchJson(paths[1]))
     await flush()
     assert.deepEqual(cardPositions(ui).slice(0, positions.length), positions, 'published card positions stay fixed')
-    assert.equal(ui.controls['filter-status'].textContent, '3 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '3 Memes')
     assert.equal(ui.node.attributes['aria-busy'], 'false')
     openGalleryItem(ui, 0)
     assert.deepEqual(Array.from(ui.lightbox.options.dataSource, item => item.imageId),
@@ -1419,14 +1438,14 @@ test('incomplete-results notice retains a loading indicator while newer search c
     await flush()
     await applyFilters(ui, { 'filter-search': 'OCR' })
     assert.equal(ui.node.innerHTML, '')
-    assert.match(ui.controls['filter-status'].textContent, /unvollständig geladen.*Archiv wird geladen/)
+    assert.match(ui.controls['filter-status'].textContent, /unvollständig geladen.*lade Memes\.\.\./)
     assert.equal(ui.node.attributes['aria-busy'], 'true')
     release(await fetchJson(newest))
     await flush()
     assert.match(ui.node.innerHTML, /2024-03-02_b.jpg/)
     assert.match(ui.node.innerHTML, /2024-02-02_b.jpg/)
     assert.match(ui.controls['filter-status'].textContent, /unvollständig geladen/)
-    assert.doesNotMatch(ui.controls['filter-status'].textContent, /Archiv wird geladen/)
+    assert.doesNotMatch(ui.controls['filter-status'].textContent, /lade Memes\.\.\./)
     assert.equal(ui.node.attributes['aria-busy'], 'false')
 })
 
@@ -1447,15 +1466,15 @@ test('search renders partial matches and respects filter changes while an index 
     await applyFilters(ui, { 'filter-search': 'OCR' })
     assert.match(ui.node.innerHTML, /2024-03-02_b.jpg/)
     assert.doesNotMatch(ui.node.innerHTML, /2024-01-02_b.jpg/)
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder (Archiv wird geladen…)')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes (lade Memes...)')
     await applyFilters(ui, { 'filter-search': 'different' })
     assert.match(ui.node.innerHTML, /2024-02-02_b.jpg/)
     release(await fetchJson('images/2024/01/entry_index.json'))
     await flush()
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.doesNotMatch(ui.node.innerHTML, /2024-01-02_b.jpg|2024-03-02_b.jpg/)
     await applyFilters(ui, { 'filter-search': 'OCR' })
-    assert.equal(ui.controls['filter-status'].textContent, '2 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '2 Memes')
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
 })
 
@@ -1472,7 +1491,7 @@ test('search keeps partial results after an index fails and allows retry', async
     assert.match(ui.controls['filter-status'].textContent, /unvollständig geladen/)
     ui.context.fetchJson = fetchJson
     await applyFilters(ui, { 'filter-search': 'OCR' })
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
 })
 
 test('search covers older unloaded directories, descriptions and tags, not regex patterns', async () => {
@@ -1483,7 +1502,7 @@ test('search covers older unloaded directories, descriptions and tags, not regex
     await flush()
     for (const search of ['oCr', 'DESCRIPTION', 'sesamstraße', '<img src=x']) {
         await applyFilters(ui, { 'filter-search': search })
-        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+        assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
         assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     }
     await applyFilters(ui, { 'filter-search': '.*' })
@@ -1577,7 +1596,7 @@ test('multi-term and quoted searches combine metadata filters and survive shared
         await applyFilters(ui, {
             'filter-reactions': '7', 'filter-template': result.template, 'filter-search': query,
         })
-        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', query)
+        assert.equal(ui.controls['filter-status'].textContent, '1 Memes', query)
         assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
         assert.doesNotMatch(ui.node.innerHTML, /2024-01-01_a.jpg/)
         assert.equal(new URL(ui.context.location.href).searchParams.get('q'), query)
@@ -1589,15 +1608,15 @@ test('multi-term and quoted searches combine metadata filters and survive shared
     await flush()
     await flush()
     assert.equal(shared.controls['filter-search'].value, '"Steuern sind Diebstahl" taxation')
-    assert.equal(shared.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(shared.controls['filter-status'].textContent, '1 Memes')
     assert.match(shared.node.innerHTML, /2024-01-02_b.jpg/)
 
     await applyFilters(ui, { 'filter-reactions': '0', 'filter-search': 'diebstahl steuern' })
-    assert.equal(ui.controls['filter-status'].textContent, '2 passende Bilder', 'terms can span fields')
+    assert.equal(ui.controls['filter-status'].textContent, '2 Memes', 'terms can span fields')
     await applyFilters(ui, { 'filter-search': '"steuern sind diebstahl"' })
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', 'phrases cannot span fields')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes', 'phrases cannot span fields')
     await applyFilters(ui, { 'filter-search': '"tag apfel"' })
-    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder', 'phrases cannot span tags')
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes', 'phrases cannot span tags')
 })
 
 test('search normalizes German umlauts in queries and entries without changing displayed text or URLs', async () => {
@@ -1617,7 +1636,7 @@ test('search normalizes German umlauts in queries and entries without changing d
     await flush()
     for (const search of ['apfel', 'OL', 'ubung', 'GRÜN', 'kase ol', 'KÄSE_ÖL']) {
         await applyFilters(ui, { 'filter-search': search })
-        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', search)
+        assert.equal(ui.controls['filter-status'].textContent, '1 Memes', search)
         assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
         assert.equal(ui.controls['filter-search'].value, search)
         assert.equal(new URL(ui.context.location.href).searchParams.get('q'), search)
@@ -1638,11 +1657,11 @@ test('punctuation-insensitive search covers text, descriptions, templates and al
     for (const search of ['dont panic', 'hello world', 'example template', 'shared tag',
         'deutsches stichwort', 'english tag', 'english-tag']) {
         await applyFilters(ui, { 'filter-search': search })
-        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder', search)
+        assert.equal(ui.controls['filter-status'].textContent, '1 Memes', search)
         assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
     }
     await applyFilters(ui, { 'filter-search': 'english_tag' })
-    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes')
 })
 
 test('search matches phrases across line breaks in text and descriptions', async () => {
@@ -1660,7 +1679,7 @@ test('search matches phrases across line breaks in text and descriptions', async
         '  first   second  ', 'description\nspanning', '"FIRST second third fourth"',
         '"description spanning multiple lines"', '"first second" "multiple lines"']) {
         await applyFilters(ui, { 'filter-search': search })
-        assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+        assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
         assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
         assert.doesNotMatch(ui.node.innerHTML, /2024-01-01_a.jpg/)
     }
@@ -2146,7 +2165,7 @@ test('a filter change cancels pending scroll hydration and queued upgrades', asy
     for (const image of originalRequests(ui)) image.onload()
     await flush()
     assert.equal(ui.node.innerHTML, '')
-    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes')
     assert.equal(ui.imageRequests.length, initialRequests)
 })
 
@@ -2722,7 +2741,7 @@ test('shared filtered image waits for metadata and keeps a rare template selecte
     await flush()
     assert.equal(ui.lightbox.openedIndex, 0)
     assert.equal(ui.lightbox.options.dataSource[0].imageId, imageId)
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
 })
 
 test('shared unfiltered image loads its month and uses a stable filename, not a positional index', async () => {
@@ -2936,7 +2955,7 @@ test('a failed metadata month keeps images and other chunks, and a filter change
     assert.match(ui.controls['filter-status'].textContent, /Archiv unvollständig/)
     await applyFilters(ui, { 'filter-search': 'older month only' })
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.equal(attempts, 2)
 })
 
@@ -2956,14 +2975,14 @@ test('worker results from superseded queries cannot replace newer filters or cle
     ui.resolveClassifications({ [imageId]: result })
     await flush()
     await applyFilters(ui, { 'filter-search': 'OCR' })
-    assert.equal(ui.controls['filter-status'].textContent, 'Suche läuft…')
+    assert.equal(ui.controls['filter-status'].textContent, 'lade Memes...')
     assert.ok(held.length)
     await applyFilters(ui, { 'filter-search': 'absent' })
-    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes')
     for (const deliver of held) deliver()
     await flush()
     assert.equal(ui.node.innerHTML, '')
-    assert.equal(ui.controls['filter-status'].textContent, '0 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '0 Memes')
     const queryCount = () => workers[0].sent.filter(data => data.type === 'query').length
     assert.equal(queryCount(), 2)
     const clock = scrollClock(ui)
@@ -3020,13 +3039,13 @@ test('a worker crash during filtering settles the query and a new filter retries
     ui.resolveClassifications({ [imageId]: result })
     await flush()
     await applyFilters(ui, { 'filter-search': 'OCR' })
-    assert.equal(ui.controls['filter-status'].textContent, 'Suche läuft…')
+    assert.equal(ui.controls['filter-status'].textContent, 'lade Memes...')
     workers[0].onerror({ message: 'Worker crashed', preventDefault() {} })
     await flush()
     assert.match(ui.controls['filter-status'].textContent, /Suche nicht verfügbar/)
     withhold = false
     await applyFilters(ui, { 'filter-search': 'OCR' })
     assert.equal(workers.length, 2)
-    assert.equal(ui.controls['filter-status'].textContent, '1 passende Bilder')
+    assert.equal(ui.controls['filter-status'].textContent, '1 Memes')
     assert.match(ui.node.innerHTML, /2024-01-02_b.jpg/)
 })
