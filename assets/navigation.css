@@ -35,6 +35,9 @@ body.site-nav-modal-open { overflow: hidden; }
 .site-nav-link-text strong { display: block; font-size: 14px; }
 .site-nav-link-text small { display: block; color: #aaa; font-size: 12px; overflow-wrap: anywhere; }
 .site-nav-arrow { color: var(--nav-pink); }
+.site-nav-featured { margin-bottom: 12px; padding: 16px; background: #30202b; border-color: var(--nav-pink); }
+.site-nav-featured:hover { background: #402b39; border-color: var(--nav-pink); }
+.site-nav-featured strong { color: var(--nav-pink); font-size: 16px; }
 .site-nav-method-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .site-nav-method-picker button { padding: 10px 6px; font-size: 13px; font-weight: 600; }
 .site-nav-method-picker button[aria-pressed="true"] { box-shadow: inset 0 0 0 2px currentColor; }

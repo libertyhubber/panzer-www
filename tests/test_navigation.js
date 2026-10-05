@@ -173,6 +173,10 @@ test('generated main page includes approved navigation and retains the gallery',
     assert.match(html, /id="gallery"/)
     assert.match(html, /PhotoSwipeLightbox/)
     assert.equal([...html.matchAll(/class="site-nav-social"/g)].length, 6)
+    const links = html.match(/<nav[^>]*aria-label="Creator-Links">([\s\S]*?)<\/nav>/)[1]
+    assert.match(links, /^\s*<a class="site-nav-social site-nav-featured" href="https:\/\/lib-lib\.org\/" target="_blank" rel="noopener noreferrer">/)
+    assert.match(links, /<strong>Freie Übersetzungen libertärer Werke<\/strong>/)
+    assert.match(html, /\/assets\/navigation\.css\?cb=2/)
     assert.match(html, /href="https:\/\/instagram\.com\/rosarotepanzer2"/)
     assert.match(html, /<strong>Instagram<\/strong><small>@rosarotepanzer2<\/small>/)
     assert.deepEqual([...html.matchAll(/data-nav-method="([^"]+)"/g)].map(match => match[1]), methods)
